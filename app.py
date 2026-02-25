@@ -1,23 +1,23 @@
 import os
-import openai
+import streamlit as st
+from openai import OpenAI
 import json
 
-# Configuration de la clé API (à mettre dans un fichier .env en production)
-openai.api_key = "TA_CLE_API_OPENAI"
+# On configure le client pour qu'il pointe vers l'API gratuite de Groq au lieu d'OpenAI
+client = OpenAI(
+    api_key=st.secrets["GROQ_API_KEY"],
+    base_url="https://api.groq.com/openai/v1"
+)
 
 def get_match_data(team_home, team_away):
-    """
-    Ici, tu connecteras plus tard l'API de Sportmonks ou API-Football.
-    Pour l'instant, on structure les données exactes dont l'IA a besoin.
-    """
-    # Données simulées ultra-complètes pour le match
+    # ... (Garde exactement la même fonction get_match_data qu'avant) ...
     return {
         "match": f"{team_home} vs {team_away}",
         "competition": "Ligue des Champions",
         "context": {
-            "home_form_last_5": "V V N V D", # V=Victoire, N=Nul, D=Défaite
+            "home_form_last_5": "V V N V D",
             "away_form_last_5": "V V V V V",
-            "home_xG_trend": 1.8, # Expected Goals moyens récents
+            "home_xG_trend": 1.8,
             "away_xG_trend": 2.4,
             "home_absentees": ["Courtois (Gardien titulaire)", "Militao (Défenseur central)"],
             "away_absentees": ["Aucun"],
@@ -28,23 +28,18 @@ def get_match_data(team_home, team_away):
             "draw": 3.40,
             "away_win": 2.40,
             "over_2_5": 1.65,
-            "btts": 1.55 # Both Teams To Score (Les deux marquent)
+            "btts": 1.55
         }
     }
 
 def calculate_bet_tiers(match_data):
-    """
-    Algorithme qui définit les 3 paliers de risque selon les cotes et les stats.
-    """
+    # ... (Garde exactement la même fonction calculate_bet_tiers qu'avant) ...
     odds = match_data["odds"]
     
-    # Logique simplifiée pour l'exemple : on cherche la valeur
-    safe_bet = "Plus de 1.5 buts" # Souvent couvert dans les gros matchs
+    safe_bet = "Plus de 1.5 buts"
     safe_odd = 1.25
-    
     mid_bet = "Les deux équipes marquent (BTTS)"
     mid_odd = odds["btts"]
-    
     aggressive_bet = "Victoire de Manchester City"
     aggressive_odd = odds["away_win"]
 
@@ -55,9 +50,6 @@ def calculate_bet_tiers(match_data):
     }
 
 def generate_expert_analysis(match_data, bet_tiers):
-    """
-    Le prompt système ultra-strict pour obliger l'IA à faire une vraie analyse logique.
-    """
     prompt = f"""
     Tu es un expert en analyse de données sportives et en paris sur le football.
     Génère une analyse logique, directe et sans phrases d'introduction inutiles pour le match suivant.
@@ -82,42 +74,34 @@ def generate_expert_analysis(match_data, bet_tiers):
     4. Rédige 3 paragraphes maximum. Sois tranchant, professionnel et mathématique. Aucun blabla générique du type "Le ballon est rond".
     """
 
-    response = openai.chat.completions.create(
-        model="gpt-4o", # Le modèle le plus performant pour le raisonnement logique
+    # Ici, on utilise le nouveau 'client' configuré avec Groq
+    response = client.chat.completions.create(
+        model="llama3-70b-8192", # Le meilleur modèle open-source actuel dispo gratuitement sur Groq
         messages=[
             {"role": "system", "content": "Tu es un data-analyste sportif de très haut niveau."},
             {"role": "user", "content": prompt}
         ],
-        temperature=0.3 # Température basse = réponses factuelles et logiques, peu d'improvisation
+        temperature=0.3
     )
     
     return response.choices[0].message.content
 
-def main():
-    # 1. On cible le match
-    home = "Real Madrid"
-    away = "Manchester City"
-    
-    # 2. On récupère les données
-    print(f"--- Extraction des données pour {home} vs {away} ---")
+# Pour que ça s'affiche sur la page Streamlit (interface graphique basique)
+st.title("⚽ Moteur IA - Pronostics Football")
+
+home = st.text_input("Équipe à Domicile", "Real Madrid")
+away = st.text_input("Équipe à l'Extérieur", "Manchester City")
+
+if st.button("Lancer l'Analyse IA"):
     data = get_match_data(home, away)
-    
-    # 3. On calcule les paliers de paris
     tiers = calculate_bet_tiers(data)
     
-    # 4. On génère l'analyse finale via IA
-    print("--- Génération de l'analyse IA en cours... ---\n")
-    analysis = generate_expert_analysis(data, tiers)
+    with st.spinner("L'IA génère l'analyse complète..."):
+        analysis = generate_expert_analysis(data, tiers)
     
-    # Affichage du résultat final (ce qui sera envoyé sur ton site/Telegram)
-    print(f"⚽ {home} vs {away}")
-    print("-" * 30)
-    print("🎯 RECOMMANDATIONS :")
+    st.subheader("🎯 RECOMMANDATIONS")
     for level, info in tiers.items():
-        print(f"[{level}] {info['prono']} (Cote: {info['cote']})")
-    print("-" * 30)
-    print("🧠 ANALYSE DU MATCH :")
-    print(analysis)
-
-if __name__ == "__main__":
-    main()
+        st.write(f"**[{level}]** {info['prono']} (Cote: {info['cote']})")
+        
+    st.subheader("🧠 ANALYSE DU MATCH")
+    st.write(analysis)

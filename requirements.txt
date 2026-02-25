@@ -1,3 +1,5 @@
-openai
+streamlit
 pandas
 plotly
+requests
+groq

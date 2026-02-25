@@ -22,7 +22,7 @@ BASE_URL = "https://v3.football.api-sports.io"
 if 'view' not in st.session_state:
     st.session_state.view = 'search'
 
-# --- STYLE CSS ---
+# --- STYLE CSS (On garde ce que tu kiffes) ---
 st.markdown("""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap');
@@ -67,36 +67,41 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- FONCTIONS API ---
+# --- FONCTIONS API AVEC GESTION D'ERREURS ---
 @st.cache_data(ttl=3600)
 def fetch_teams(name):
     try:
-        r = requests.get(f"{BASE_URL}/teams", headers=HEADERS, params={"search": name}, timeout=10)
-        return r.json().get('response', [])
+        r = requests.get(f"{BASE_URL}/teams", headers=HEADERS, params={"search": name}, timeout=10).json()
+        if r.get('errors') and isinstance(r['errors'], dict) and len(r['errors']) > 0:
+            st.error(f"⚠️ Alerte API : {r['errors']}")
+            return []
+        return r.get('response', [])
     except: return []
 
 @st.cache_data(ttl=1800)
 def fetch_club_data(team_id):
-    # Récupère les 5 derniers matchs pour calculer la forme
     try:
-        r_last = requests.get(f"{BASE_URL}/fixtures", headers=HEADERS, params={"team": team_id, "last": 5}, timeout=10)
-        last_fixtures = r_last.json().get('response', [])
+        r_last = requests.get(f"{BASE_URL}/fixtures", headers=HEADERS, params={"team": team_id, "last": 5}, timeout=10).json()
+        r_next = requests.get(f"{BASE_URL}/fixtures", headers=HEADERS, params={"team": team_id, "next": 4}, timeout=10).json()
         
-        # Récupère les prochains matchs
-        r_next = requests.get(f"{BASE_URL}/fixtures", headers=HEADERS, params={"team": team_id, "next": 4}, timeout=10)
-        next_fixtures = r_next.json().get('response', [])
-        
-        return last_fixtures, next_fixtures
-    except: return [], []
+        # Détection de la limite de requêtes API
+        errors = r_last.get('errors', {}) or r_next.get('errors', {})
+        if errors and isinstance(errors, dict) and len(errors) > 0:
+            return [], [], errors
+            
+        return r_last.get('response', []), r_next.get('response', []), None
+    except Exception as e: 
+        return [], [], {"Exception": str(e)}
 
 def get_ai_prediction(home, away):
     client = Groq(api_key=GROQ_KEY)
-    prompt = f"""Analyse le match : {home} vs {away}. 
-    Sois ultra direct, style expert en paris sportifs.
+    prompt = f"""Tu es un analyste expert en paris sportifs (gestion de bankroll, value bet).
+    Analyse le duel : {home} vs {away}. 
+    Va droit au but, pas d'introduction.
     
-    Donne exactement 3 conseils de paris selon le profil du parieur :
-    1. 🟢 PROFIL SAFE (Pari très probable pour sécuriser, ex: double chance, over 1.5) + Courte explication.
-    2. 🟡 PROFIL VALUE (Le meilleur ratio risque/gain, le 'vrai' pronostic) + Courte explication.
+    Donne exactement 3 stratégies claires :
+    1. 🟢 PROFIL SAFE (Pari très probable pour sécuriser, ex: double chance, over 1.5) + Courte explication factuelle.
+    2. 🟡 PROFIL VALUE (Le meilleur ratio risque/gain, le vrai bon coup) + Courte explication.
     3. 🔴 PROFIL COUP DE FOLIE (Gros risque, grosse cote, ex: buteur + score exact) + Courte explication.
     """
     chat = client.chat.completions.create(model="llama-3.3-70b-versatile", messages=[{"role": "user", "content": prompt}], temperature=0.4)
@@ -109,7 +114,7 @@ if st.session_state.view == 'search':
 
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
-        query = st.text_input("", placeholder="ENTRER UN CLUB...", label_visibility="collapsed")
+        query = st.text_input("", placeholder="ENTRER UN CLUB (ex: Marseille, Real Madrid)...", label_visibility="collapsed")
 
     if query:
         results = fetch_teams(query)
@@ -146,59 +151,63 @@ elif st.session_state.view == 'club':
         </div>
     """, unsafe_allow_html=True)
 
-    with st.spinner("Analyse des datas du club..."):
-        last_matches, next_matches = fetch_club_data(team['id'])
+    with st.spinner("Téléchargement des données de la base API..."):
+        last_matches, next_matches, api_error = fetch_club_data(team['id'])
 
-    col_form, col_next = st.columns([1, 2])
+    # SI L'API EST BLOQUÉE (Quota max)
+    if api_error:
+        st.error(f"🛑 Blocage API détecté : {api_error}")
+        st.info("💡 Explication : Tu as probablement épuisé tes 100 requêtes gratuites du jour à force de faire des tests. Le compteur se remet à zéro à minuit !")
     
-    with col_form:
-        st.markdown("### 📊 ÉTAT DE FORME (5 DERNIERS)")
-        if last_matches:
-            form_html = ""
-            for m in last_matches:
-                # Logique pour déterminer V, N, D
-                goals_home = m['goals']['home']
-                goals_away = m['goals']['away']
-                is_home = m['teams']['home']['id'] == team['id']
-                
-                if goals_home == goals_away:
-                    res, color_class = "N", "form-d"
-                elif (is_home and goals_home > goals_away) or (not is_home and goals_away > goals_home):
-                    res, color_class = "V", "form-w"
-                else:
-                    res, color_class = "D", "form-l"
+    else:
+        col_form, col_next = st.columns([1, 2])
+        
+        with col_form:
+            st.markdown("### 📊 ÉTAT DE FORME (5 DERNIERS)")
+            if last_matches:
+                form_html = ""
+                for m in last_matches:
+                    goals_home = m['goals']['home']
+                    goals_away = m['goals']['away']
+                    is_home = m['teams']['home']['id'] == team['id']
                     
-                form_html += f"<span class='form-badge {color_class}'>{res}</span>"
-            st.markdown(f"<div>{form_html}</div><br>", unsafe_allow_html=True)
-            
-            # Afficher les scores récents
-            for m in reversed(last_matches[-3:]): # Les 3 plus récents
-                st.markdown(f"<p style='font-size:13px; color:#8892b0; margin:0;'>{m['teams']['home']['name']} <b>{m['goals']['home']} - {m['goals']['away']}</b> {m['teams']['away']['name']}</p>", unsafe_allow_html=True)
-        else:
-            st.write("Données récentes indisponibles.")
+                    if goals_home == goals_away:
+                        res, color_class = "N", "form-d"
+                    elif (is_home and goals_home > goals_away) or (not is_home and goals_away > goals_home):
+                        res, color_class = "V", "form-w"
+                    else:
+                        res, color_class = "D", "form-l"
+                        
+                    form_html += f"<span class='form-badge {color_class}'>{res}</span>"
+                st.markdown(f"<div>{form_html}</div><br>", unsafe_allow_html=True)
+                
+                for m in reversed(last_matches[-3:]): 
+                    st.markdown(f"<p style='font-size:13px; color:#8892b0; margin:0;'>{m['teams']['home']['name']} <b>{m['goals']['home']} - {m['goals']['away']}</b> {m['teams']['away']['name']}</p>", unsafe_allow_html=True)
+            else:
+                st.write("Données récentes indisponibles (trêve ou fin de saison).")
 
-    with col_next:
-        st.markdown("### 🗓️ MATCHS À VENIR")
-        if next_matches:
-            cols_m = st.columns(2)
-            for i, f in enumerate(next_matches[:4]):
-                with cols_m[i%2]:
-                    date = datetime.fromisoformat(f['fixture']['date'].replace('Z','+00:00')).strftime('%d/%m à %H:%M')
-                    st.markdown(f"""
-                        <div class='match-card'>
-                            <p style='color:#00ff88; font-size:11px; font-weight:bold; margin:0;'>{f['league']['name']}</p>
-                            <p style='font-size:14px; font-weight:bold; margin:10px 0;'>{f['teams']['home']['name']} <br>vs<br> {f['teams']['away']['name']}</p>
-                            <p style='color:#8892b0; font-size:12px; margin:0;'>{date}</p>
-                        </div>
-                    """, unsafe_allow_html=True)
-                    if st.button("ANALYSER", key=f"btn_match_{f['fixture']['id']}"):
-                        st.session_state.match_data = f
-                        st.session_state.view = 'match'
-                        st.rerun()
-        else:
-            st.info("Aucun match programmé trouvé.")
+        with col_next:
+            st.markdown("### 🗓️ MATCHS À VENIR")
+            if next_matches:
+                cols_m = st.columns(2)
+                for i, f in enumerate(next_matches[:4]):
+                    with cols_m[i%2]:
+                        date = datetime.fromisoformat(f['fixture']['date'].replace('Z','+00:00')).strftime('%d/%m à %H:%M')
+                        st.markdown(f"""
+                            <div class='match-card'>
+                                <p style='color:#00ff88; font-size:11px; font-weight:bold; margin:0;'>{f['league']['name']}</p>
+                                <p style='font-size:14px; font-weight:bold; margin:10px 0;'>{f['teams']['home']['name']} <br>vs<br> {f['teams']['away']['name']}</p>
+                                <p style='color:#8892b0; font-size:12px; margin:0;'>{date}</p>
+                            </div>
+                        """, unsafe_allow_html=True)
+                        if st.button("ANALYSER CE MATCH", key=f"btn_match_{f['fixture']['id']}"):
+                            st.session_state.match_data = f
+                            st.session_state.view = 'match'
+                            st.rerun()
+            else:
+                st.info("Aucun match programmé trouvé dans la base pour l'instant.")
 
-# --- VUE 3 : ANALYSE DU MATCH ---
+# --- VUE 3 : ANALYSE DU MATCH & PRONOS ---
 elif st.session_state.view == 'match':
     m = st.session_state.match_data
     h, a = m['teams']['home']['name'], m['teams']['away']['name']
@@ -224,7 +233,7 @@ elif st.session_state.view == 'match':
     with t1:
         st.markdown("### L'ORACLE PREDICTECH")
         if st.button("GÉNÉRER LES CONSEILS DE PARIS", use_container_width=False):
-            with st.spinner("Llama-3.3 analyse les dynamiques et les cotes..."):
+            with st.spinner("Llama-3.3 analyse les dynamiques et les probabilités..."):
                 prediction = get_ai_prediction(h, a)
                 st.markdown(f"""
                     <div style='background:#11141b; padding:30px; border-radius:15px; border:1px solid #2d303e; font-size:15px; line-height:1.7;'>

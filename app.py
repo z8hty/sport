@@ -61,10 +61,18 @@ st.markdown("""
     .league-header { font-size: 20px; font-weight: bold; color: #60efff; border-bottom: 1px solid #2d303e; padding-bottom: 10px; margin-top: 30px; margin-bottom: 20px; text-transform: uppercase; }
     .prob-bar-bg { background-color: #1a1c23; border-radius: 5px; height: 10px; width: 100%; margin-top: 5px; overflow: hidden; }
     .prob-bar-fill { height: 100%; background: linear-gradient(90deg, #00ff88, #60efff); transition: 1s ease-in-out; }
-    .team-stats-box { background: #11141b; border: 1px solid #2d303e; padding: 20px; border-radius: 15px; text-align: center; }
+    .team-stats-box { background: #11141b; border: 1px solid #2d303e; padding: 20px; border-radius: 15px; text-align: center; margin-bottom: 15px; }
     .stat-number { font-size: 24px; font-weight: bold; color: #00ff88; }
     </style>
     """, unsafe_allow_html=True)
+
+# --- OUTILS DE FORMATAGE ---
+def format_form(form_string):
+    """Transforme W/D/L en pastilles visuelles (🟢⚪🔴)"""
+    if not form_string or form_string == 'Non dispo': return "N/A"
+    # On garde seulement les 5 derniers matchs s'il y en a plus
+    form_string = form_string[-5:]
+    return form_string.replace('W', '🟢').replace('D', '⚪').replace('L', '🔴')
 
 # --- MOTEUR CATALOGUE (0 BLOCAGE) ---
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -96,12 +104,7 @@ def get_match_odds(fixture_id):
         except: pass
     return {}
 
-def format_form(form_string):
-    """Transforme W/D/L en pastilles visuelles"""
-    if not form_string or form_string == 'Non dispo': return "N/A"
-    return form_string.replace('W', '🟢').replace('D', '⚪').replace('L', '🔴')
-
-# --- CALCUL DES STATS ---
+# --- CALCUL DES STATS MATHÉMATIQUES ---
 def get_fallback_stats(team_name):
     seed = int(hashlib.md5(team_name.encode()).hexdigest(), 16)
     random.seed(seed)
@@ -139,7 +142,7 @@ def calculate_true_stats(team_id, team_name, standings_data):
     return get_fallback_stats(team_name)
 
 def calculate_probabilities(stats_h, stats_a):
-    power_h = stats_h['atk'] + stats_h['def'] + stats_h['dyn'] + 10
+    power_h = stats_h['atk'] + stats_h['def'] + stats_h['dyn'] + 10 # Avantage domicile
     power_a = stats_a['atk'] + stats_a['def'] + stats_a['dyn']
     if power_h == 0 and power_a == 0: return 33, 34, 33 
     
@@ -158,20 +161,21 @@ def get_ai_prediction(home, away, stats_h, stats_a, odds):
     - {away} (Ext) : Attaque {stats_a['atk']}/100, Défense {stats_a['def']}/100, Forme {stats_a['dyn']}/100, Buts {stats_a['xg']}.
     COTES (1X2) : 1 ({odds.get('Home', '-')}) | X ({odds.get('Draw', '-')}) | 2 ({odds.get('Away', '-')})
     
-    CONSIGNES :
-    1. Base-toi UNIQUEMENT sur ces mathématiques.
-    2. Sois direct, factuel et tranchant.
+    CONSIGNES STRICTES :
+    1. Base-toi UNIQUEMENT sur ces mathématiques pour justifier tes choix.
+    2. Sois direct, factuel et précis. Ne fais pas d'introduction bavarde.
 
-    DONNE EXACTEMENT 3 CHOIX DE PARIS CLAIRS :
-    1. 🟢 PARI SAFE (Sécurité maximale : Double chance, Over/Under buts, ou un fait de jeu très probable).
-    2. 🟡 PARI AUDACIEUX (Plus osé mais appuyé par la data : Victoire + BTTS, Buteur probable, équipe gagne une mi-temps).
-    3. 🔴 COUP DE POKER (Le ticket fun à petite mise : Score exact parfait, ou écart de buts précis).
+    DONNE EXACTEMENT 3 CHOIX DE PARIS CLAIRS, selon ces niveaux de risque :
+    1. 🟢 PARI SAFE (Sécurité maximale) : Propose une Double Chance (ex: 1N), un Over/Under de buts (ex: +1.5 buts), ou un pari type 'L'une des équipes marque'. Explique mathématiquement pourquoi c'est sûr.
+    2. 🟡 PARI AUDACIEUX (Logique mais mieux coté) : Propose un pari combiné (ex: Victoire + les deux marquent), ou une équipe gagne une mi-temps. Justifie-le avec la différence de stats (Attaque vs Défense adverse).
+    3. 🔴 COUP DE POKER (Le ticket fun) : Donne un pronostic de score exact très précis ou un écart de but (ex: Victoire par exactement 1 but d'écart), basé sur la moyenne des buts (xG) des deux équipes.
     """
     chat = client.chat.completions.create(model="llama-3.3-70b-versatile", messages=[{"role": "user", "content": prompt}], temperature=0.3)
     return chat.choices[0].message.content
 
 # --- INTERFACE DE GRILLE ---
 def render_match_grid(matches, show_date=False):
+    """Affiche les matchs groupés par compétition avec un design épuré"""
     if not matches:
         st.info("Aucun match majeur programmé pour cette période.")
         return
@@ -228,14 +232,14 @@ if st.session_state.view == 'home':
     t1, t2 = st.tabs(["🔥 GROSSES AFFICHES (À VENIR)", "📅 MATCHS DU JOUR"])
 
     with t1:
-        st.markdown("<p style='color:#8892b0; margin-bottom:20px;'>Les chocs majeurs programmés pour les prochains jours.</p>", unsafe_allow_html=True)
+        st.markdown("<p style='color:#8892b0; margin-bottom:20px;'>Les chocs majeurs programmés pour demain et les jours suivants.</p>", unsafe_allow_html=True)
         render_match_grid(upcoming_matches, show_date=True)
         
     with t2:
-        st.markdown("<p style='color:#8892b0; margin-bottom:20px;'>Toutes les rencontres importantes d'aujourd'hui.</p>", unsafe_allow_html=True)
+        st.markdown("<p style='color:#8892b0; margin-bottom:20px;'>Toutes les rencontres importantes de la journée.</p>", unsafe_allow_html=True)
         render_match_grid(matches_today, show_date=False)
 
-# --- VUE 2 : ANALYSE & PRONOS MATCH ---
+# --- VUE 2 : ANALYSE DU MATCH ---
 elif st.session_state.view == 'match':
     m = st.session_state.match_data
     h, a = m['teams']['home']['name'], m['teams']['away']['name']
@@ -267,26 +271,27 @@ elif st.session_state.view == 'match':
         </div>
     """, unsafe_allow_html=True)
     
-    # Boutons pour accéder aux pages Profil Equipe
-    c1, c2, c3 = st.columns([1, 2, 1])
-    with c1:
-        if st.button(f"📊 PROFIL {h.upper()}", use_container_width=True):
-            st.session_state.team_view_data = {'id': h_id, 'name': h, 'logo': m['teams']['home']['logo'], 'league': league_id}
-            st.session_state.view = 'team'
+    # Boutons d'accès rapide aux profils des équipes
+    col_t1, col_t2 = st.columns(2)
+    with col_t1:
+        if st.button(f"🔍 VOIR LE PROFIL DE {h.upper()}", key="btn_team1"):
+            st.session_state.team_data = {'id': h_id, 'name': h, 'logo': m['teams']['home']['logo'], 'stats': stats_h}
+            st.session_state.view = 'team_profile'
             st.rerun()
-    with c3:
-        if st.button(f"📊 PROFIL {a.upper()}", use_container_width=True):
-            st.session_state.team_view_data = {'id': a_id, 'name': a, 'logo': m['teams']['away']['logo'], 'league': league_id}
-            st.session_state.view = 'team'
+    with col_t2:
+        if st.button(f"🔍 VOIR LE PROFIL DE {a.upper()}", key="btn_team2"):
+            st.session_state.team_data = {'id': a_id, 'name': a, 'logo': m['teams']['away']['logo'], 'stats': stats_a}
+            st.session_state.view = 'team_profile'
             st.rerun()
-    
+            
     st.markdown("<br>", unsafe_allow_html=True)
 
-    t1, t2 = st.tabs(["🧠 ORACLE IA", "📊 DATA MATRICES"])
+    t1, t2 = st.tabs(["🧠 L'ORACLE (PRONOSTICS)", "📊 DATA MATRICES"])
     
     with t1:
+        st.markdown("### MOTEUR DE DÉCISION")
         if st.button("LANCER L'ANALYSE MATHÉMATIQUE", use_container_width=False):
-            with st.spinner("Llama-3.3 analyse les scénarios..."):
+            with st.spinner("Llama-3.3 évalue les risques et crée les scénarios..."):
                 prediction = get_ai_prediction(h, a, stats_h, stats_a, odds)
                 st.markdown(f"""
                     <div style='background:#11141b; padding:30px; border-radius:15px; border:1px solid #00ff88; font-size:15px; line-height:1.7;'>
@@ -323,20 +328,20 @@ elif st.session_state.view == 'match':
             
             metrics = [
                 ("Moy. Buts par Match", str(stats_h['xg']), str(stats_a['xg'])), 
-                ("Série en cours", format_form(stats_h['form_str'][-5:] if stats_h['form_str'] else "Non dispo"), format_form(stats_a['form_str'][-5:] if stats_a['form_str'] else "Non dispo"))
+                ("Série en cours", format_form(stats_h['form_str']), format_form(stats_a['form_str']))
             ]
             for label, v1, v2 in metrics:
                 st.markdown(f"""
                     <div style='display:flex; justify-content:space-between; padding:10px 0; border-bottom:1px solid #1a1c23;'>
-                        <span style='color:#00ff88; font-weight:bold; font-size:13px;'>{v1}</span>
+                        <span style='color:#00ff88; font-weight:bold; font-size:15px;'>{v1}</span>
                         <span style='color:#8892b0; font-size:12px;'>{label.upper()}</span>
-                        <span style='color:#60efff; font-weight:bold; font-size:13px;'>{v2}</span>
+                        <span style='color:#60efff; font-weight:bold; font-size:15px;'>{v2}</span>
                     </div>
                 """, unsafe_allow_html=True)
 
-# --- VUE 3 : PROFIL D'UNE ÉQUIPE ---
-elif st.session_state.view == 'team':
-    t_data = st.session_state.team_view_data
+# --- VUE 3 : PROFIL D'ÉQUIPE ---
+elif st.session_state.view == 'team_profile':
+    t = st.session_state.team_data
     
     col_btn, _ = st.columns([1, 5])
     with col_btn:
@@ -346,409 +351,52 @@ elif st.session_state.view == 'team':
             st.rerun()
         st.markdown("</div>", unsafe_allow_html=True)
 
-    with st.spinner(f"Analyse des métriques de {t_data['name']}..."):
-        standings = fetch_standings(t_data['league'])
-        stats = calculate_true_stats(t_data['id'], t_data['name'], standings)
-
     st.markdown(f"""
         <div style='text-align:center; padding:30px; margin-bottom:20px;'>
-            <img src="{t_data['logo']}" width="100">
-            <h1 style='margin-top:15px; color:white;'>{t_data['name'].upper()}</h1>
+            <img src="{t['logo']}" width="100">
+            <h1 style='margin-top:15px; color:white;'>{t['name'].upper()}</h1>
         </div>
     """, unsafe_allow_html=True)
 
-    c1, c2 = st.columns([1, 1])
+    col_rad, col_stat = st.columns(2)
     
-    with c1:
+    with col_rad:
         fig = go.Figure(go.Scatterpolar(
-            r=[stats['atk'], stats['def'], stats['dyn'], 50, stats['atk']], 
-            theta=['Attaque','Défense','Forme','Structure','Attaque'], fill='toself', line_color='#00ff88', name=t_data['name']
+            r=[t['stats']['atk'], t['stats']['def'], t['stats']['dyn'], 50, t['stats']['atk']], 
+            theta=['Attaque','Défense','Forme Globale','Structure','Attaque'], fill='toself', line_color='#00ff88', name=t['name']
         ))
         fig.update_layout(template="plotly_dark", polar=dict(radialaxis=dict(visible=False)), paper_bgcolor='rgba(0,0,0,0)', margin=dict(t=20, b=20))
         st.plotly_chart(fig, use_container_width=True)
 
-    with c2:
-        st.markdown("<br><br>", unsafe_allow_html=True)
-        col_stat1, col_stat2 = st.columns(2)
-        with col_stat1:
-            st.markdown(f"""
-                <div class='team-stats-box'>
-                    <div class='stat-number'>{stats['xg']}</div>
-                    <div style='color:#8892b0; font-size:12px; margin-top:5px;'>BUTS/MATCH (xG)</div>
-                </div>
-            """, unsafe_allow_html=True)
-        with col_stat2:
-            st.markdown(f"""
-                <div class='team-stats-box'>
-                    <div class='stat-number'>{format_form(stats['form_str'][-5:] if stats['form_str'] else "Non dispo")}</div>
-                    <div style='color:#8892b0; font-size:12px; margin-top:5px;'>SÉRIE (5 DERNIERS)</div>
-                </div>
-            """, unsafe_allow_html=True)
-            
+    with col_stat:
         st.markdown("<br>", unsafe_allow_html=True)
+        col_b1, col_b2 = st.columns(2)
+        with col_b1:
+            st.markdown(f"""
+                <div class='team-stats-box'>
+                    <div class='stat-number'>{t['stats']['xg']}</div>
+                    <div style='color:#8892b0; font-size:12px; margin-top:5px;'>BUTS PAR MATCH (xG)</div>
+                </div>
+            """, unsafe_allow_html=True)
+        with col_b2:
+            st.markdown(f"""
+                <div class='team-stats-box'>
+                    <div class='stat-number' style='font-size:18px; line-height:35px;'>{format_form(t['stats']['form_str'])}</div>
+                    <div style='color:#8892b0; font-size:12px; margin-top:5px;'>SÉRIE EN COURS</div>
+                </div>
+            """, unsafe_allow_html=True)
+
         st.markdown(f"""
-            <div style='display:flex; justify-content:space-between; padding:15px 0; border-bottom:1px solid #1a1c23;'>
-                <span style='color:#8892b0;'>Indice Attaque</span>
-                <span style='color:#00ff88; font-weight:bold;'>{stats['atk']} / 100</span>
+            <div style='padding:15px 0; border-bottom:1px solid #1a1c23;'>
+                <span style='color:#8892b0;'>Indice Offensif</span>
+                <span style='color:#00ff88; font-weight:bold; float:right;'>{t['stats']['atk']} / 100</span>
             </div>
-            <div style='display:flex; justify-content:space-between; padding:15px 0; border-bottom:1px solid #1a1c23;'>
-                <span style='color:#8892b0;'>Indice Défense</span>
-                <span style='color:#00ff88; font-weight:bold;'>{stats['def']} / 100</span>
+            <div style='padding:15px 0; border-bottom:1px solid #1a1c23;'>
+                <span style='color:#8892b0;'>Indice Défensif</span>
+                <span style='color:#00ff88; font-weight:bold; float:right;'>{t['stats']['def']} / 100</span>
             </div>
-            <div style='display:flex; justify-content:space-between; padding:15px 0;'>
-                <span style='color:#8892b0;'>Dynamique</span>
-                <span style='color:#00ff88; font-weight:bold;'>{stats['dyn']} / 100</span>
+            <div style='padding:15px 0;'>
+                <span style='color:#8892b0;'>Dynamique (Forme)</span>
+                <span style='color:#00ff88; font-weight:bold; float:right;'>{t['stats']['dyn']} / 100</span>
             </div>
-        """, unsafe_allow_html=True)import streamlit as st
-import requests
-import hashlib
-import random
-import pandas as pd
-import plotly.graph_objects as go
-from datetime import datetime, timedelta
-from groq import Groq
-
-# --- CONFIGURATION ---
-st.set_page_config(page_title="PredicTech | OS", layout="wide", initial_sidebar_state="collapsed")
-
-try:
-    API_KEY = st.secrets["API_SPORTS_KEY"]
-    GROQ_KEY = st.secrets["GROQ_API_KEY"]
-except:
-    st.error("⚠️ Clés API introuvables. Vérifie tes Secrets sur Streamlit.")
-    st.stop()
-
-HEADERS = {"x-apisports-key": API_KEY}
-BASE_URL = "https://v3.football.api-sports.io"
-
-# Compétitions majeures du catalogue
-TOP_LEAGUES = {
-    2: "🇪🇺 Champions League",
-    3: "🇪🇺 Europa League",
-    39: "🇬🇧 Premier League",
-    61: "🇫🇷 Ligue 1",
-    78: "🇩🇪 Bundesliga",
-    135: "🇮🇹 Serie A",
-    140: "🇪🇸 La Liga"
-}
-
-if 'view' not in st.session_state:
-    st.session_state.view = 'home'
-
-if 'vault' not in st.session_state:
-    st.session_state.vault = pd.DataFrame(columns=["Date", "Match", "Pari", "Cote", "Mise", "Gain Potentiel"])
-
-# --- STYLE CSS TERMINAL PRO ---
-st.markdown("""
-    <style>
-    @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap');
-    * { font-family: 'JetBrains Mono', monospace; }
-    .stApp { background-color: #05070a; color: #e0e0e0; }
-    .main-title { 
-        font-size: 55px; font-weight: 900; text-align: center; 
-        background: linear-gradient(90deg, #00ff88, #60efff);
-        -webkit-background-clip: text; -webkit-text-fill-color: transparent;
-        margin-bottom: 0px; letter-spacing: -2px;
-    }
-    .match-card {
-        background: #11141b; border: 1px solid #2d303e; border-radius: 15px;
-        padding: 20px; transition: 0.3s; text-align: center; margin-bottom: 15px;
-    }
-    .match-card:hover { border-color: #00ff88; transform: translateY(-3px); box-shadow: 0 10px 20px rgba(0,255,136,0.1); }
-    .stButton>button {
-        background: #11141b; border: 1px solid #00ff88; color: #00ff88;
-        border-radius: 8px; transition: 0.3s; width: 100%; font-weight: bold;
-    }
-    .stButton>button:hover { background: #00ff88; color: #05070a; box-shadow: 0 0 10px #00ff88; }
-    .btn-back>button { border-color: #8892b0; color: #8892b0; }
-    .btn-back>button:hover { background: #8892b0; color: #05070a; box-shadow: none; }
-    .league-header { font-size: 20px; font-weight: bold; color: #60efff; border-bottom: 1px solid #2d303e; padding-bottom: 10px; margin-top: 30px; margin-bottom: 20px; text-transform: uppercase; }
-    .prob-bar-bg { background-color: #1a1c23; border-radius: 5px; height: 10px; width: 100%; margin-top: 5px; overflow: hidden; }
-    .prob-bar-fill { height: 100%; background: linear-gradient(90deg, #00ff88, #60efff); transition: 1s ease-in-out; }
-    </style>
-    """, unsafe_allow_html=True)
-
-# --- MOTEUR CATALOGUE (0 BLOCAGE) ---
-@st.cache_data(ttl=3600, show_spinner=False)
-def fetch_daily_catalog(date_str):
-    """Télécharge les matchs d'une date précise. Ne bloque jamais."""
-    try:
-        r = requests.get(f"{BASE_URL}/fixtures", headers=HEADERS, params={"date": date_str, "timezone": "Europe/Paris"}, timeout=10).json()
-        fixtures = r.get('response', [])
-        valid_statuses = ['NS', 'TBD', 'PST']
-        filtered = [f for f in fixtures if f['league']['id'] in TOP_LEAGUES.keys() and f['fixture']['status']['short'] in valid_statuses]
-        filtered.sort(key=lambda x: x['fixture']['timestamp'])
-        return filtered
-    except:
-        return []
-
-@st.cache_data(ttl=3600, show_spinner=False)
-def fetch_standings(league_id):
-    try:
-        r = requests.get(f"{BASE_URL}/standings", headers=HEADERS, params={"league": league_id, "season": 2024}, timeout=10).json()
-        return r.get('response', [])
-    except: return []
-
-def get_match_odds(fixture_id):
-    if fixture_id:
-        try:
-            r = requests.get(f"{BASE_URL}/odds", headers=HEADERS, params={"fixture": fixture_id}, timeout=5).json()
-            if r.get('response'):
-                bets = r['response'][0]['bookmakers'][0]['bets'][0]['values']
-                return {b['value']: str(b['odd']) for b in bets}
-        except: pass
-    return {}
-
-# --- STATISTIQUES MATHÉMATIQUES ---
-def get_fallback_stats(team_name):
-    seed = int(hashlib.md5(team_name.encode()).hexdigest(), 16)
-    random.seed(seed)
-    if team_name in ["Real Madrid", "Manchester City", "Bayern Munich", "Liverpool", "Arsenal"]: atk, df = 90, 85
-    elif team_name in ["Paris Saint Germain", "Barcelona", "Inter", "Bayer Leverkusen", "Juventus"]: atk, df = 85, 82
-    elif team_name in ["AC Milan", "Tottenham", "Chelsea", "Manchester United", "Borussia Dortmund"]: atk, df = 81, 78
-    elif team_name in ["Marseille", "Lille", "Monaco", "Newcastle", "AS Roma", "Benfica"]: atk, df = 77, 75
-    else: atk, df = 73, 72
-
-    return {'atk': atk + random.randint(-2, 2), 'def': df + random.randint(-2, 2), 'dyn': random.randint(65, 85), 'xg': round((atk / 100) * 2.2, 2), 'form_str': 'Non dispo'}
-
-def calculate_true_stats(team_id, team_name, standings_data):
-    if not standings_data: return get_fallback_stats(team_name)
-    try:
-        league_standings = standings_data[0]['league']['standings'][0]
-        team_data = next((t for t in league_standings if t['team']['id'] == team_id), None)
-        
-        if team_data and team_data['all']['played'] > 0:
-            played = team_data['all']['played']
-            goals_for = team_data['all']['goals']['for']
-            goals_against = team_data['all']['goals']['against']
-            form = team_data.get('form', '')
-            
-            avg_gf = goals_for / played
-            avg_ga = goals_against / played
-            
-            stats = {}
-            stats['atk'] = min(100, int((avg_gf / 2.5) * 100))
-            stats['def'] = max(10, min(100, int(100 - ((avg_ga / 2.0) * 100))))
-            stats['xg'] = round(avg_gf, 2)
-            stats['form_str'] = form
-            stats['dyn'] = int((sum([3 if r == 'W' else 1 if r == 'D' else 0 for r in form]) / (len(form) * 3)) * 100) if form else 70
-            return stats
-    except: pass
-    return get_fallback_stats(team_name)
-
-def calculate_probabilities(stats_h, stats_a):
-    power_h = stats_h['atk'] + stats_h['def'] + stats_h['dyn'] + 10
-    power_a = stats_a['atk'] + stats_a['def'] + stats_a['dyn']
-    if power_h == 0 and power_a == 0: return 33, 34, 33 
-    
-    diff = power_h - power_a
-    prob_h = max(5, min(90, int(45 + (diff * 0.4))))
-    prob_a = max(5, min(90, int(30 - (diff * 0.4))))
-    return prob_h, 100 - prob_h - prob_a, prob_a
-
-def get_ai_prediction(home, away, stats_h, stats_a, odds):
-    client = Groq(api_key=GROQ_KEY)
-    prompt = f"""Tu es un algorithme de prédiction mathématique de paris sportifs professionnel.
-    Analyse ce match : {home} vs {away}.
-    
-    DATA PURE :
-    - {home} (Dom) : Attaque {stats_h['atk']}/100, Défense {stats_h['def']}/100, Forme {stats_h['dyn']}/100, Buts {stats_h['xg']}.
-    - {away} (Ext) : Attaque {stats_a['atk']}/100, Défense {stats_a['def']}/100, Forme {stats_a['dyn']}/100, Buts {stats_a['xg']}.
-    COTES (1X2) : 1 ({odds.get('Home', '-')}) | X ({odds.get('Draw', '-')}) | 2 ({odds.get('Away', '-')})
-    
-    CONSIGNES :
-    1. Base-toi UNIQUEMENT sur ces mathématiques.
-    2. Si les cotes contredisent les data, signale une "Value Bet".
-    3. Sois direct, factuel et tranchant.
-
-    DONNE 3 CHOIX DE PARIS CLAIRS :
-    1. 🟢 PARI SAFE (Le plus probable selon les stats).
-    2. 🟡 VALUE BET (Meilleur ratio risque/gain).
-    3. 🔴 COUP DE POKER STATISTIQUE (Scénario de match).
-    """
-    chat = client.chat.completions.create(model="llama-3.3-70b-versatile", messages=[{"role": "user", "content": prompt}], temperature=0.3)
-    return chat.choices[0].message.content
-
-# --- INTERFACE DE GRILLE ---
-def render_match_grid(matches, show_date=False):
-    """Affiche les matchs groupés par compétition avec un design épuré"""
-    if not matches:
-        st.info("Aucun match majeur programmé pour cette période.")
-        return
-
-    matches_by_league = {}
-    for m in matches:
-        lid = m['league']['id']
-        if lid not in matches_by_league: matches_by_league[lid] = []
-        matches_by_league[lid].append(m)
-
-    for lid, league_matches in matches_by_league.items():
-        league_name = TOP_LEAGUES.get(lid, "Compétition")
-        st.markdown(f"<div class='league-header'>{league_name}</div>", unsafe_allow_html=True)
-        
-        cols = st.columns(3)
-        for i, f in enumerate(league_matches):
-            with cols[i % 3]:
-                # Formatage de l'heure et/ou de la date
-                if show_date:
-                    time_str = datetime.fromisoformat(f['fixture']['date'].replace('Z','+00:00')).strftime('%d/%m - %H:%M')
-                else:
-                    time_str = datetime.fromisoformat(f['fixture']['date'].replace('Z','+00:00')).strftime('%H:%M')
-                
-                st.markdown(f"""
-                    <div class='match-card'>
-                        <div style="display:flex; justify-content:space-around; align-items:center; margin-bottom:15px;">
-                            <img src="{f['teams']['home']['logo']}" width="45">
-                            <span style="font-weight:bold; color:#8892b0; font-size:12px; background:#1a1c23; padding:4px 8px; border-radius:5px;">{time_str}</span>
-                            <img src="{f['teams']['away']['logo']}" width="45">
-                        </div>
-                        <p style='font-size:15px; font-weight:bold; margin:0;'>{f['teams']['home']['name']}<br><span style="color:#2d303e; font-size:12px;">VS</span><br>{f['teams']['away']['name']}</p>
-                    </div>
-                """, unsafe_allow_html=True)
-                if st.button("ANALYSER LE MATCH", key=f"btn_{f['fixture']['id']}"):
-                    st.session_state.match_data = f
-                    st.session_state.view = 'match'
-                    st.rerun()
-
-# --- VUE 1 : LE CATALOGUE DES PARIS ---
-if st.session_state.view == 'home':
-    st.markdown("<h1 class='main-title'>PREDICTECH.OS</h1>", unsafe_allow_html=True)
-    st.markdown("<p style='text-align:center; color:#8892b0; margin-bottom:40px;'>CATALOGUE D'ANALYSES ALGORITHMIQUES</p>", unsafe_allow_html=True)
-
-    date_today = datetime.now()
-    date_tmrw = date_today + timedelta(days=1)
-    date_after = date_today + timedelta(days=2)
-
-    with st.spinner("Synchronisation des vitrines de matchs..."):
-        matches_today = fetch_daily_catalog(date_today.strftime("%Y-%m-%d"))
-        matches_tmrw = fetch_daily_catalog(date_tmrw.strftime("%Y-%m-%d"))
-        matches_after = fetch_daily_catalog(date_after.strftime("%Y-%m-%d"))
-
-    upcoming_matches = matches_tmrw + matches_after
-
-    t1, t2 = st.tabs(["🔥 GROSSES AFFICHES (À VENIR)", "📅 MATCHS DU JOUR"])
-
-    with t1:
-        st.markdown("<p style='color:#8892b0; margin-bottom:20px;'>Les chocs majeurs programmés pour les prochains jours.</p>", unsafe_allow_html=True)
-        render_match_grid(upcoming_matches, show_date=True)
-        
-    with t2:
-        st.markdown("<p style='color:#8892b0; margin-bottom:20px;'>Toutes les rencontres importantes d'aujourd'hui.</p>", unsafe_allow_html=True)
-        render_match_grid(matches_today, show_date=False)
-
-# --- VUE 2 : ANALYSE & PRONOS ---
-elif st.session_state.view == 'match':
-    m = st.session_state.match_data
-    h, a = m['teams']['home']['name'], m['teams']['away']['name']
-    h_id, a_id = m['teams']['home']['id'], m['teams']['away']['id']
-    fix_id = m['fixture']['id']
-    league_id = m['league']['id']
-    
-    col_btn, _ = st.columns([1, 5])
-    with col_btn:
-        st.markdown("<div class='btn-back'>", unsafe_allow_html=True)
-        if st.button("🔙 RETOUR CATALOGUE"):
-            st.session_state.view = 'home'
-            st.rerun()
-        st.markdown("</div>", unsafe_allow_html=True)
-
-    with st.spinner("Extraction des mathématiques du match..."):
-        standings = fetch_standings(league_id)
-        stats_h = calculate_true_stats(h_id, h, standings)
-        stats_a = calculate_true_stats(a_id, a, standings)
-        prob_h, prob_n, prob_a = calculate_probabilities(stats_h, stats_a)
-        odds = get_match_odds(fix_id)
-
-    st.markdown(f"""
-        <div style='text-align:center; padding:30px; border-bottom:1px solid #2d303e; margin-bottom:30px;'>
-            <img src="{m['teams']['home']['logo']}" width="60" style="vertical-align:middle; margin-right:20px;">
-            <span style='font-size:35px; font-weight:900; color:white; vertical-align:middle;'>{h} vs {a}</span>
-            <img src="{m['teams']['away']['logo']}" width="60" style="vertical-align:middle; margin-left:20px;">
-            <p style='color:#00ff88; margin-top:10px; font-size:14px;'>COTES 1X2 : 1 ({odds.get('Home', '-')}) | X ({odds.get('Draw', '-')}) | 2 ({odds.get('Away', '-')})</p>
-        </div>
-    """, unsafe_allow_html=True)
-    
-    t1, t2, t3 = st.tabs(["🧠 ORACLE IA", "📊 DATA MATRICES", "🏦 BANKROLL"])
-    
-    with t1:
-        st.markdown("### MOTEUR DE DÉCISION")
-        if st.button("LANCER L'ANALYSE MATHÉMATIQUE", use_container_width=False):
-            with st.spinner("Llama-3.3 analyse les ratios de performance..."):
-                prediction = get_ai_prediction(h, a, stats_h, stats_a, odds)
-                st.markdown(f"""
-                    <div style='background:#11141b; padding:30px; border-radius:15px; border:1px solid #00ff88; font-size:15px; line-height:1.7;'>
-                        {prediction}
-                    </div>
-                """, unsafe_allow_html=True)
-
-    with t2:
-        col_rad, col_stat = st.columns(2)
-        with col_rad:
-            fig = go.Figure(go.Scatterpolar(
-                r=[stats_h['atk'], stats_h['def'], stats_h['dyn'], 50, stats_h['atk']], 
-                theta=['Attaque','Défense','Forme','Structure','Attaque'], fill='toself', line_color='#00ff88', name=h
-            ))
-            fig.add_trace(go.Scatterpolar(
-                r=[stats_a['atk'], stats_a['def'], stats_a['dyn'], 50, stats_a['atk']], 
-                theta=['Attaque','Défense','Forme','Structure','Attaque'], fill='toself', line_color='#60efff', name=a
-            ))
-            fig.update_layout(template="plotly_dark", polar=dict(radialaxis=dict(visible=False)), paper_bgcolor='rgba(0,0,0,0)', margin=dict(t=20, b=20))
-            st.plotly_chart(fig, use_container_width=True)
-            
-        with col_stat:
-            st.markdown("### 🎯 MATRICE DE VICTOIRE")
-            st.markdown(f"**{h}** ({prob_h}%)")
-            st.markdown(f"<div class='prob-bar-bg'><div class='prob-bar-fill' style='width:{prob_h}%;'></div></div>", unsafe_allow_html=True)
-            
-            st.markdown(f"<br>**Nul** ({prob_n}%)", unsafe_allow_html=True)
-            st.markdown(f"<div class='prob-bar-bg'><div class='prob-bar-fill' style='width:{prob_n}%; background:linear-gradient(90deg, #8892b0, #4f5b7d);'></div></div>", unsafe_allow_html=True)
-            
-            st.markdown(f"<br>**{a}** ({prob_a}%)", unsafe_allow_html=True)
-            st.markdown(f"<div class='prob-bar-bg'><div class='prob-bar-fill' style='width:{prob_a}%; background:linear-gradient(90deg, #ff4b4b, #ff8c8c);'></div></div>", unsafe_allow_html=True)
-            
-            st.markdown("<hr style='border-color:#2d303e;'>", unsafe_allow_html=True)
-            
-            metrics = [
-                ("Moy. Buts par Match", str(stats_h['xg']), str(stats_a['xg'])), 
-                ("Série en cours", stats_h['form_str'][-5:] if stats_h['form_str'] else "N/A", stats_a['form_str'][-5:] if stats_a['form_str'] else "N/A")
-            ]
-            for label, v1, v2 in metrics:
-                st.markdown(f"""
-                    <div style='display:flex; justify-content:space-between; padding:10px 0; border-bottom:1px solid #1a1c23;'>
-                        <span style='color:#00ff88; font-weight:bold; font-size:13px;'>{v1}</span>
-                        <span style='color:#8892b0; font-size:12px;'>{label.upper()}</span>
-                        <span style='color:#60efff; font-weight:bold; font-size:13px;'>{v2}</span>
-                    </div>
-                """, unsafe_allow_html=True)
-
-    with t3:
-        st.markdown("### 🏦 ARCHIVER UN PARI")
-        c1, c2, c3, c4 = st.columns(4)
-        pari_nom = c1.text_input("Pari (ex: Victoire Domicile)", "")
-        pari_cote = c2.number_input("Cote", min_value=1.01, value=1.85, step=0.05)
-        pari_mise = c3.number_input("Mise (€)", min_value=1, value=10, step=5)
-        
-        with c4:
-            st.markdown("<br>", unsafe_allow_html=True)
-            if st.button("SAUVEGARDER", use_container_width=True):
-                if pari_nom:
-                    new_bet = {
-                        "Date": datetime.now().strftime("%d/%m/%Y"),
-                        "Match": f"{h} vs {a}",
-                        "Pari": pari_nom,
-                        "Cote": pari_cote,
-                        "Mise": pari_mise,
-                        "Gain": round(pari_mise * pari_cote, 2)
-                    }
-                    st.session_state.vault = pd.concat([st.session_state.vault, pd.DataFrame([new_bet])], ignore_index=True)
-                    st.success("Archivé !")
-        
-        st.markdown("---")
-        st.markdown("### 📊 HISTORIQUE")
-        if not st.session_state.vault.empty:
-            st.dataframe(st.session_state.vault, use_container_width=True, hide_index=True)
-            total_mise = st.session_state.vault['Mise'].sum()
-            total_gain = st.session_state.vault['Gain'].sum()
-            c_res1, c_res2 = st.columns(2)
-            c_res1.metric("Capital Engagé", f"{total_mise} €")
-            c_res2.metric("Retour Potentiel", f"{total_gain} €", f"+{round(total_gain - total_mise, 2)} €")
+        """, unsafe_allow_html=True)

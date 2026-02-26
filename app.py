@@ -75,20 +75,22 @@ def fetch_teams(name):
 @st.cache_data(ttl=1800)
 def fetch_team_fixtures(team_id):
     try:
-        # On contourne le blocage du paramètre "next" en utilisant une fenêtre de dates
-        date_from = datetime.now().strftime("%Y-%m-%d")
-        date_to = (datetime.now() + timedelta(days=90)).strftime("%Y-%m-%d")
+        # Solution Ultime : On calcule la saison en cours
+        current_month = datetime.now().month
+        current_year = datetime.now().year
+        season = current_year - 1 if current_month < 7 else current_year
         
+        # On aspire toute la saison (100% autorisé par l'API gratuite)
         r = requests.get(f"{BASE_URL}/fixtures", headers=HEADERS, params={
             "team": team_id,
-            "from": date_from,
-            "to": date_to
+            "season": season
         }, timeout=10).json()
         
         fixtures = r.get('response', [])
         
-        # On filtre en Python pour ne garder que les matchs non joués
-        upcoming = [f for f in fixtures if f['fixture']['status']['short'] in ['NS', 'TBD', 'PST']]
+        # Statuts valides : NS (Non commencé), TBD (À définir), ou matchs en cours (1H, HT, 2H...)
+        valid_statuses = ['NS', 'TBD', 'PST', '1H', 'HT', '2H', 'ET', 'P', 'SUSP', 'INT']
+        upcoming = [f for f in fixtures if f['fixture']['status']['short'] in valid_statuses]
         
         # On trie du plus proche au plus lointain et on prend les 5 premiers
         upcoming.sort(key=lambda x: x['fixture']['timestamp'])
@@ -210,7 +212,7 @@ if st.session_state.view == 'home':
 
     if 'selected_team_id' in st.session_state:
         st.markdown(f"#### 🗓️ PROCHAINS MATCHS DE {st.session_state.selected_team_name.upper()}")
-        with st.spinner("Recherche dans le calendrier..."):
+        with st.spinner("Recherche dans le calendrier de la saison..."):
             fixtures = fetch_team_fixtures(st.session_state.selected_team_id)
             
         if fixtures:
@@ -230,7 +232,7 @@ if st.session_state.view == 'home':
                         st.session_state.view = 'match'
                         st.rerun()
         else:
-            st.info("Aucun match officiel programmé trouvé pour les 90 prochains jours.")
+            st.info("Aucun match officiel programmé trouvé pour la saison en cours.")
 
     st.markdown("---")
     st.markdown("### 🏆 MATCHS MAJEURS DU JOUR")

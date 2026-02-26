@@ -6,6 +6,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
 from groq import Groq
+import time
 
 # --- CONFIGURATION ---
 st.set_page_config(page_title="PredicTech | OS", layout="wide", initial_sidebar_state="collapsed")
@@ -55,10 +56,11 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- MOTEUR DE RECHERCHE (NOUVEAU CACHE VIERGE V4) ---
+# --- MOTEUR DE RECHERCHE FURTIF (V5 - Anti Burst-Limit) ---
 @st.cache_data(ttl=3600, show_spinner=False)
-def get_daily_fixtures_v4(date_str):
-    """Nouveau nom pour forcer Streamlit à oublier les anciennes erreurs"""
+def get_daily_fixtures_v5(date_str):
+    """Télécharge les matchs du jour avec une micro-pause pour ne pas affoler l'API"""
+    time.sleep(0.35) 
     r = requests.get(f"{BASE_URL}/fixtures", headers=HEADERS, params={"date": date_str, "timezone": "Europe/Paris"}, timeout=10).json()
     if r.get('errors'):
         raise Exception("Limite API atteinte")
@@ -67,7 +69,7 @@ def get_daily_fixtures_v4(date_str):
 def fetch_top_matches(days_offset=0):
     target_date = (datetime.now() + timedelta(days=days_offset)).strftime("%Y-%m-%d")
     try:
-        fixtures = get_daily_fixtures_v4(target_date)
+        fixtures = get_daily_fixtures_v5(target_date)
         top_leagues = [2, 3, 39, 61, 78, 135, 140]
         filtered = [f for f in fixtures if f['league']['id'] in top_leagues]
         return filtered[:6] if filtered else fixtures[:6]
@@ -85,23 +87,23 @@ def fetch_team_fixtures(team_id):
     upcoming = []
     valid_statuses = ['NS', 'TBD', 'PST', '1H', 'HT', '2H', 'ET', 'P']
     
-    # Scan sur 6 jours (Aujourd'hui + 5 jours) = 6 requêtes max. Ne bloque jamais l'API.
-    for i in range(6):
+    # On scanne Aujourd'hui + 6 jours (Donc 7 jours au total, couvre tout le week-end)
+    for i in range(7):
         date_str = (datetime.now() + timedelta(days=i)).strftime("%Y-%m-%d")
         try:
-            day_fixtures = get_daily_fixtures_v4(date_str)
+            day_fixtures = get_daily_fixtures_v5(date_str)
             for f in day_fixtures:
                 if f['teams']['home']['id'] == team_id or f['teams']['away']['id'] == team_id:
                     if f['fixture']['status']['short'] in valid_statuses:
                         upcoming.append(f)
         except Exception:
-            st.warning("⚠️ L'API a bloqué (max 10 requêtes/minute). Patiente 60 secondes et réessaie.")
+            st.warning("⚠️ L'API te demande de ralentir (Protection anti-robots). Réessaie dans 30 secondes.")
             break
             
-        if len(upcoming) >= 2: # On s'arrête dès qu'on a trouvé les 2 prochains matchs pour préserver l'API
+        if len(upcoming) >= 3: # On s'arrête dès qu'on a trouvé les prochains matchs
             break
             
-    return upcoming
+    return upcoming[:3]
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def fetch_standings(league_id, season):
@@ -217,28 +219,35 @@ if st.session_state.view == 'home':
     st.markdown("<p style='text-align:center; color:#8892b0; margin-bottom:40px;'>LE TERMINAL DES PARIS INTELLIGENTS</p>", unsafe_allow_html=True)
 
     st.markdown("### 🔍 RECHERCHER UN CLUB")
-    col1, col2, col3 = st.columns([1, 2, 1])
-    with col2:
-        query = st.text_input("", placeholder="Chercher une équipe (ex: Marseille, Real Madrid)...", label_visibility="collapsed")
     
-    if query:
+    # Formulaire pour éviter que chaque touche tapée ne lance une requête API
+    with st.form("search_form"):
+        col1, col2 = st.columns([3, 1])
+        query = col1.text_input("", placeholder="Chercher une équipe (ex: Marseille, Lyon)...", label_visibility="collapsed")
+        submit_search = col2.form_submit_button("Rechercher", use_container_width=True)
+    
+    if submit_search and query:
         with st.spinner("Recherche en cours..."):
             teams = fetch_teams(query)
             if teams:
-                cols = st.columns(len(teams[:4]))
-                for i, res in enumerate(teams[:4]):
-                    with cols[i]:
-                        st.markdown(f"<div style='text-align:center; margin-bottom:10px;'><img src='{res['team']['logo']}' width='60'></div>", unsafe_allow_html=True)
-                        if st.button(res['team']['name'], key=f"t_{res['team']['id']}", use_container_width=True):
-                            st.session_state.selected_team_id = res['team']['id']
-                            st.session_state.selected_team_name = res['team']['name']
-                            st.rerun()
+                st.session_state.search_results = teams
+                st.session_state.selected_team_id = None
             else:
                 st.error("Aucune équipe trouvée.")
+                
+    if st.session_state.get('search_results') and not st.session_state.get('selected_team_id'):
+        cols = st.columns(len(st.session_state.search_results[:4]))
+        for i, res in enumerate(st.session_state.search_results[:4]):
+            with cols[i]:
+                st.markdown(f"<div style='text-align:center; margin-bottom:10px;'><img src='{res['team']['logo']}' width='60'></div>", unsafe_allow_html=True)
+                if st.button(res['team']['name'], key=f"t_{res['team']['id']}", use_container_width=True):
+                    st.session_state.selected_team_id = res['team']['id']
+                    st.session_state.selected_team_name = res['team']['name']
+                    st.rerun()
 
-    if 'selected_team_id' in st.session_state:
-        st.markdown(f"#### 🗓️ MATCHS À VENIR : {st.session_state.selected_team_name.upper()}")
-        with st.spinner("Scan du calendrier du week-end en cours..."):
+    if st.session_state.get('selected_team_id'):
+        st.markdown(f"#### 🗓️ MATCHS DE {st.session_state.selected_team_name.upper()} (7 PROCHAINS JOURS)")
+        with st.spinner("Scan furtif du calendrier en cours (Patientez un instant)..."):
             fixtures = fetch_team_fixtures(st.session_state.selected_team_id)
             
         if fixtures:
@@ -258,7 +267,7 @@ if st.session_state.view == 'home':
                         st.session_state.view = 'match'
                         st.rerun()
         else:
-            st.info("Aucun match trouvé d'ici mardi prochain.")
+            st.info("Aucun match trouvé pour ce club d'ici la semaine prochaine.")
 
     st.markdown("---")
     st.markdown("### 🏆 MATCHS MAJEURS DU JOUR")

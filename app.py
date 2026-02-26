@@ -55,17 +55,22 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- FONCTIONS API ROBUSTES ---
+# --- FONCTIONS API ROBUSTES (ANTI RATE-LIMIT) ---
+@st.cache_data(ttl=3600)
+def fetch_fixtures_by_date(date_str):
+    """Télécharge tous les matchs d'une date (1 requête) et met en cache pour économiser l'API"""
+    try:
+        r = requests.get(f"{BASE_URL}/fixtures", headers=HEADERS, params={"date": date_str}, timeout=5).json()
+        return r.get('response', [])
+    except: return []
+
 @st.cache_data(ttl=3600)
 def fetch_top_matches(days_offset=0):
     target_date = (datetime.now() + timedelta(days=days_offset)).strftime("%Y-%m-%d")
-    try:
-        r = requests.get(f"{BASE_URL}/fixtures", headers=HEADERS, params={"date": target_date}, timeout=10).json()
-        fixtures = r.get('response', [])
-        top_leagues = [2, 3, 39, 61, 78, 135, 140]
-        filtered = [f for f in fixtures if f['league']['id'] in top_leagues]
-        return filtered[:6] if filtered else fixtures[:6]
-    except: return []
+    fixtures = fetch_fixtures_by_date(target_date)
+    top_leagues = [2, 3, 39, 61, 78, 135, 140]
+    filtered = [f for f in fixtures if f['league']['id'] in top_leagues]
+    return filtered[:6] if filtered else fixtures[:6]
 
 @st.cache_data(ttl=3600)
 def fetch_teams(name):
@@ -79,31 +84,20 @@ def fetch_team_fixtures(team_id):
     upcoming = []
     valid_statuses = ['NS', 'TBD', 'PST', '1H', 'HT', '2H', 'ET', 'P']
     
-    # 1. Tentative normale sans paramètre restrictif
-    try:
-        r = requests.get(f"{BASE_URL}/fixtures", headers=HEADERS, params={"team": team_id}, timeout=10).json()
-        if not r.get('errors'):
-            fixtures = r.get('response', [])
-            upcoming = [f for f in fixtures if f['fixture']['status']['short'] in valid_statuses]
-            upcoming.sort(key=lambda x: x['fixture']['timestamp'])
-            if upcoming: return upcoming[:5]
-    except: pass
-
-    # 2. Méthode "Brute Force" : On scanne le calendrier global jour par jour (Impossible à bloquer)
-    if not upcoming:
-        for i in range(8): # Scan des 8 prochains jours
-            date_str = (datetime.now() + timedelta(days=i)).strftime("%Y-%m-%d")
-            try:
-                r = requests.get(f"{BASE_URL}/fixtures", headers=HEADERS, params={"date": date_str}, timeout=5).json()
-                day_fixtures = r.get('response', [])
-                for f in day_fixtures:
-                    if f['teams']['home']['id'] == team_id or f['teams']['away']['id'] == team_id:
-                        if f['fixture']['status']['short'] in valid_statuses:
-                            upcoming.append(f)
-            except: continue
-            if len(upcoming) >= 3: break # Dès qu'on trouve des matchs on s'arrête pour gagner du temps
+    # "Smart Scan" sur les 8 prochains jours. Utilise le cache, donc 0 risque de blocage !
+    for i in range(8):
+        date_str = (datetime.now() + timedelta(days=i)).strftime("%Y-%m-%d")
+        day_fixtures = fetch_fixtures_by_date(date_str)
+        
+        for f in day_fixtures:
+            if f['teams']['home']['id'] == team_id or f['teams']['away']['id'] == team_id:
+                if f['fixture']['status']['short'] in valid_statuses:
+                    upcoming.append(f)
+        
+        if len(upcoming) >= 3:
+            break
             
-    return upcoming[:5]
+    return upcoming[:3]
 
 @st.cache_data(ttl=3600)
 def fetch_standings(league_id, season):
@@ -124,7 +118,6 @@ def get_match_odds(fixture_id):
 
 # --- CALCUL MATHÉMATIQUE DES STATS (AVEC SÉCURITÉ) ---
 def get_fallback_stats(team_name):
-    """Fallback si l'API bloque le classement : donne des stats hiérarchiques réelles"""
     seed = int(hashlib.md5(team_name.encode()).hexdigest(), 16)
     random.seed(seed)
     
@@ -176,8 +169,10 @@ def calculate_true_stats(team_id, team_name, standings_data):
     return get_fallback_stats(team_name)
 
 def calculate_probabilities(stats_h, stats_a):
-    power_h = stats_h['atk'] + stats_h['def'] + stats_h['dyn'] + 10 # Léger avantage dom
+    power_h = stats_h['atk'] + stats_h['def'] + stats_h['dyn'] + 10
     power_a = stats_a['atk'] + stats_a['def'] + stats_a['dyn']
+    
+    if power_h == 0 and power_a == 0: return 33, 34, 33 
     
     diff = power_h - power_a
     prob_h = 45 + (diff * 0.4)
@@ -202,7 +197,7 @@ def get_ai_prediction(home, away, stats_h, stats_a, odds):
     
     CONSIGNES STRICTES :
     1. Base-toi UNIQUEMENT sur les mathématiques fournies. 
-    2. Si les cotes sont en contradiction avec les data, signale une "Value Bet" (les bookmakers se trompent).
+    2. Si les cotes sont en contradiction avec les data, signale une "Value Bet".
     3. Sois direct, sec, et factuel.
 
     DONNE 3 CHOIX DE PARIS :
@@ -221,7 +216,7 @@ if st.session_state.view == 'home':
     st.markdown("### 🔍 RECHERCHER UN CLUB (MATCHS OFFICIELS)")
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
-        query = st.text_input("", placeholder="Chercher une équipe (ex: Real Madrid, Lille)...", label_visibility="collapsed")
+        query = st.text_input("", placeholder="Chercher une équipe (ex: Marseille, Arsenal)...", label_visibility="collapsed")
     
     if query:
         teams = fetch_teams(query)
@@ -239,12 +234,12 @@ if st.session_state.view == 'home':
 
     if 'selected_team_id' in st.session_state:
         st.markdown(f"#### 🗓️ PROCHAINS MATCHS DE {st.session_state.selected_team_name.upper()}")
-        with st.spinner("Recherche multi-serveurs en cours (Contournement API)..."):
+        with st.spinner("Analyse du calendrier des 7 prochains jours (Mode Sécurisé)..."):
             fixtures = fetch_team_fixtures(st.session_state.selected_team_id)
             
         if fixtures:
             f_cols = st.columns(min(3, len(fixtures)))
-            for i, f in enumerate(fixtures[:3]):
+            for i, f in enumerate(fixtures):
                 with f_cols[i]:
                     date = datetime.fromisoformat(f['fixture']['date'].replace('Z','+00:00')).strftime('%d/%m à %H:%M')
                     st.markdown(f"""
@@ -259,7 +254,7 @@ if st.session_state.view == 'home':
                         st.session_state.view = 'match'
                         st.rerun()
         else:
-            st.info("Aucun match trouvé dans les 7 prochains jours.")
+            st.info("Aucun match trouvé pour cette équipe dans les 7 prochains jours.")
 
     st.markdown("---")
     st.markdown("### 🏆 MATCHS MAJEURS DU JOUR")
@@ -328,7 +323,7 @@ elif st.session_state.view == 'match':
     with t1:
         st.markdown("### MOTEUR DE DÉCISION")
         if st.button("LANCER L'ANALYSE MATHÉMATIQUE", use_container_width=False):
-            with st.spinner("Llama-3.3 analyse les ratios de performance..."):
+            with st.spinner("Llama-3.3 croise les données et cherche la Value..."):
                 prediction = get_ai_prediction(h, a, stats_h, stats_a, odds)
                 st.markdown(f"""
                     <div style='background:#11141b; padding:30px; border-radius:15px; border:1px solid #00ff88; font-size:15px; line-height:1.7;'>
@@ -379,7 +374,7 @@ elif st.session_state.view == 'match':
     with t3:
         st.markdown("### 🏦 ARCHIVER UN PARI")
         c1, c2, c3, c4 = st.columns(4)
-        pari_nom = c1.text_input("Pari (ex: Victoire Arsenal)", "")
+        pari_nom = c1.text_input("Pari (ex: Victoire OM)", "")
         pari_cote = c2.number_input("Cote", min_value=1.01, value=1.85, step=0.05)
         pari_mise = c3.number_input("Mise (€)", min_value=1, value=10, step=5)
         

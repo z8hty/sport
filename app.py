@@ -56,23 +56,29 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- MOTEUR DE RECHERCHE FURTIF (V5 - Anti Burst-Limit) ---
+# --- MOTEUR DE RECHERCHE OPTIMISÉ (ANTI 10 REQ/MIN) ---
 @st.cache_data(ttl=3600, show_spinner=False)
-def get_daily_fixtures_v5(date_str):
-    """Télécharge les matchs du jour avec une micro-pause pour ne pas affoler l'API"""
-    time.sleep(0.35) 
+def fetch_fixtures_by_date(date_str):
+    time.sleep(0.4) # Pause furtive pour ne pas déclencher l'alarme API
     r = requests.get(f"{BASE_URL}/fixtures", headers=HEADERS, params={"date": date_str, "timezone": "Europe/Paris"}, timeout=10).json()
     if r.get('errors'):
-        raise Exception("Limite API atteinte")
+        raise Exception("Rate limit hit")
     return r.get('response', [])
 
-def fetch_top_matches(days_offset=0):
-    target_date = (datetime.now() + timedelta(days=days_offset)).strftime("%Y-%m-%d")
+def fetch_top_matches():
+    target_date = datetime.now().strftime("%Y-%m-%d")
     try:
-        fixtures = get_daily_fixtures_v5(target_date)
+        fixtures = fetch_fixtures_by_date(target_date)
         top_leagues = [2, 3, 39, 61, 78, 135, 140]
         filtered = [f for f in fixtures if f['league']['id'] in top_leagues]
-        return filtered[:6] if filtered else fixtures[:6]
+        
+        # Si pas de gros matchs aujourd'hui, on cherche discrètement demain
+        if not filtered:
+            target_date_tmrw = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
+            fixtures_tmrw = fetch_fixtures_by_date(target_date_tmrw)
+            filtered = [f for f in fixtures_tmrw if f['league']['id'] in top_leagues]
+            
+        return filtered[:6]
     except:
         return []
 
@@ -87,28 +93,29 @@ def fetch_team_fixtures(team_id):
     upcoming = []
     valid_statuses = ['NS', 'TBD', 'PST', '1H', 'HT', '2H', 'ET', 'P']
     
-    # On scanne Aujourd'hui + 6 jours (Donc 7 jours au total, couvre tout le week-end)
-    for i in range(7):
+    # On scanne sur 5 jours pile poil (ex: Jeudi -> Lundi). Parfait pour le week-end, et évite la limite API.
+    for i in range(5):
         date_str = (datetime.now() + timedelta(days=i)).strftime("%Y-%m-%d")
         try:
-            day_fixtures = get_daily_fixtures_v5(date_str)
+            day_fixtures = fetch_fixtures_by_date(date_str)
             for f in day_fixtures:
                 if f['teams']['home']['id'] == team_id or f['teams']['away']['id'] == team_id:
                     if f['fixture']['status']['short'] in valid_statuses:
                         upcoming.append(f)
         except Exception:
-            st.warning("⚠️ L'API te demande de ralentir (Protection anti-robots). Réessaie dans 30 secondes.")
+            # Si l'API coupe le courant, on arrête silencieusement la boucle et on renvoie ce qu'on a déjà trouvé
             break
             
-        if len(upcoming) >= 3: # On s'arrête dès qu'on a trouvé les prochains matchs
+        if len(upcoming) >= 2: # Dès qu'on a les 2 prochains matchs, on stoppe pour économiser ton quota
             break
             
-    return upcoming[:3]
+    return upcoming[:2]
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def fetch_standings(league_id, season):
+def fetch_standings(league_id):
     try:
-        r = requests.get(f"{BASE_URL}/standings", headers=HEADERS, params={"league": league_id, "season": season}, timeout=10).json()
+        # On force la saison 2024 (Format API officiel pour la saison européenne 24/25) pour éviter l'erreur Free Plan
+        r = requests.get(f"{BASE_URL}/standings", headers=HEADERS, params={"league": league_id, "season": 2024}, timeout=10).json()
         if r.get('errors'): raise Exception()
         return r.get('response', [])
     except: return []
@@ -219,11 +226,9 @@ if st.session_state.view == 'home':
     st.markdown("<p style='text-align:center; color:#8892b0; margin-bottom:40px;'>LE TERMINAL DES PARIS INTELLIGENTS</p>", unsafe_allow_html=True)
 
     st.markdown("### 🔍 RECHERCHER UN CLUB")
-    
-    # Formulaire pour éviter que chaque touche tapée ne lance une requête API
     with st.form("search_form"):
         col1, col2 = st.columns([3, 1])
-        query = col1.text_input("", placeholder="Chercher une équipe (ex: Marseille, Lyon)...", label_visibility="collapsed")
+        query = col1.text_input("", placeholder="Chercher une équipe (ex: Marseille, Arsenal)...", label_visibility="collapsed")
         submit_search = col2.form_submit_button("Rechercher", use_container_width=True)
     
     if submit_search and query:
@@ -246,12 +251,12 @@ if st.session_state.view == 'home':
                     st.rerun()
 
     if st.session_state.get('selected_team_id'):
-        st.markdown(f"#### 🗓️ MATCHS DE {st.session_state.selected_team_name.upper()} (7 PROCHAINS JOURS)")
-        with st.spinner("Scan furtif du calendrier en cours (Patientez un instant)..."):
+        st.markdown(f"#### 🗓️ MATCHS DE {st.session_state.selected_team_name.upper()} (5 PROCHAINS JOURS)")
+        with st.spinner("Scan du calendrier du week-end en cours..."):
             fixtures = fetch_team_fixtures(st.session_state.selected_team_id)
             
         if fixtures:
-            f_cols = st.columns(min(3, len(fixtures)))
+            f_cols = st.columns(min(2, len(fixtures)))
             for i, f in enumerate(fixtures):
                 with f_cols[i]:
                     date = datetime.fromisoformat(f['fixture']['date'].replace('Z','+00:00')).strftime('%d/%m à %H:%M')
@@ -267,14 +272,12 @@ if st.session_state.view == 'home':
                         st.session_state.view = 'match'
                         st.rerun()
         else:
-            st.info("Aucun match trouvé pour ce club d'ici la semaine prochaine.")
+            st.info("Aucun match trouvé pour ce club d'ici les 5 prochains jours.")
 
     st.markdown("---")
     st.markdown("### 🏆 MATCHS MAJEURS DU JOUR")
     with st.spinner("Chargement du programme..."):
-        matches = fetch_top_matches(0)
-        if not matches:
-            matches = fetch_top_matches(1)
+        matches = fetch_top_matches()
 
     if matches:
         cols_m = st.columns(3)
@@ -305,7 +308,6 @@ elif st.session_state.view == 'match':
     h_id, a_id = m['teams']['home']['id'], m['teams']['away']['id']
     fix_id = m['fixture']['id']
     league_id = m['league']['id']
-    season = m['league']['season']
     
     col_btn, _ = st.columns([1, 5])
     with col_btn:
@@ -316,7 +318,7 @@ elif st.session_state.view == 'match':
         st.markdown("</div>", unsafe_allow_html=True)
 
     with st.spinner("Calcul des mathématiques du match..."):
-        standings = fetch_standings(league_id, season)
+        standings = fetch_standings(league_id)
         stats_h = calculate_true_stats(h_id, h, standings)
         stats_a = calculate_true_stats(a_id, a, standings)
         prob_h, prob_n, prob_a = calculate_probabilities(stats_h, stats_a)

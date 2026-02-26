@@ -75,9 +75,24 @@ def fetch_teams(name):
 @st.cache_data(ttl=1800)
 def fetch_team_fixtures(team_id):
     try:
-        # On ne récupère que les vrais matchs officiels à venir
-        r = requests.get(f"{BASE_URL}/fixtures", headers=HEADERS, params={"team": team_id, "next": 5}, timeout=10).json()
-        return r.get('response', [])
+        # On contourne le blocage du paramètre "next" en utilisant une fenêtre de dates
+        date_from = datetime.now().strftime("%Y-%m-%d")
+        date_to = (datetime.now() + timedelta(days=90)).strftime("%Y-%m-%d")
+        
+        r = requests.get(f"{BASE_URL}/fixtures", headers=HEADERS, params={
+            "team": team_id,
+            "from": date_from,
+            "to": date_to
+        }, timeout=10).json()
+        
+        fixtures = r.get('response', [])
+        
+        # On filtre en Python pour ne garder que les matchs non joués
+        upcoming = [f for f in fixtures if f['fixture']['status']['short'] in ['NS', 'TBD', 'PST']]
+        
+        # On trie du plus proche au plus lointain et on prend les 5 premiers
+        upcoming.sort(key=lambda x: x['fixture']['timestamp'])
+        return upcoming[:5]
     except: return []
 
 @st.cache_data(ttl=3600)
@@ -99,7 +114,6 @@ def get_match_odds(fixture_id):
 
 # --- CALCUL MATHÉMATIQUE DES STATS ---
 def calculate_true_stats(team_id, standings_data):
-    # Valeurs par défaut moyennes si pas de classement (ex: matchs de coupe)
     stats = {'atk': 70, 'def': 70, 'dyn': 70, 'xg': 1.5, 'form_str': 'Inconnu'}
     
     if not standings_data: return stats
@@ -114,18 +128,14 @@ def calculate_true_stats(team_id, standings_data):
             goals_against = team_data['all']['goals']['against']
             form = team_data.get('form', '')
             
-            # Calcul exact des moyennes
             avg_gf = goals_for / played
             avg_ga = goals_against / played
             
-            # Conversion en score sur 100 (on considère 2.5 buts/match comme 100 en attaque)
             stats['atk'] = min(100, int((avg_gf / 2.5) * 100))
-            # Défense : 0 but encaissé = 100, 2 buts encaissés = ~20
             stats['def'] = max(10, min(100, int(100 - ((avg_ga / 2.0) * 100))))
             stats['xg'] = round(avg_gf, 2)
             stats['form_str'] = form
             
-            # Calcul Dynamique basé sur la vraie forme (W=3, D=1, L=0)
             if form:
                 score = sum([3 if r == 'W' else 1 if r == 'D' else 0 for r in form])
                 max_score = len(form) * 3
@@ -135,10 +145,10 @@ def calculate_true_stats(team_id, standings_data):
     return stats
 
 def calculate_probabilities(stats_h, stats_a):
-    power_h = stats_h['atk'] + stats_h['def'] + stats_h['dyn'] + 10 # Léger avantage dom
+    power_h = stats_h['atk'] + stats_h['def'] + stats_h['dyn'] + 10
     power_a = stats_a['atk'] + stats_a['def'] + stats_a['dyn']
     
-    if power_h == 0 and power_a == 0: return 33, 34, 33 # Sécurité
+    if power_h == 0 and power_a == 0: return 33, 34, 33 
     
     diff = power_h - power_a
     prob_h = 45 + (diff * 0.4)
@@ -179,11 +189,10 @@ if st.session_state.view == 'home':
     st.markdown("<h1 class='main-title'>PREDICTECH.OS</h1>", unsafe_allow_html=True)
     st.markdown("<p style='text-align:center; color:#8892b0; margin-bottom:40px;'>LE TERMINAL DES PARIS INTELLIGENTS</p>", unsafe_allow_html=True)
 
-    # RECHERCHE VRAIE ÉQUIPE
     st.markdown("### 🔍 RECHERCHER UN CLUB (MATCHS OFFICIELS)")
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
-        query = st.text_input("", placeholder="Chercher une équipe (ex: Real Madrid, Lyon)...", label_visibility="collapsed")
+        query = st.text_input("", placeholder="Chercher une équipe (ex: Real Madrid, Lille)...", label_visibility="collapsed")
     
     if query:
         teams = fetch_teams(query)
@@ -201,7 +210,9 @@ if st.session_state.view == 'home':
 
     if 'selected_team_id' in st.session_state:
         st.markdown(f"#### 🗓️ PROCHAINS MATCHS DE {st.session_state.selected_team_name.upper()}")
-        fixtures = fetch_team_fixtures(st.session_state.selected_team_id)
+        with st.spinner("Recherche dans le calendrier..."):
+            fixtures = fetch_team_fixtures(st.session_state.selected_team_id)
+            
         if fixtures:
             f_cols = st.columns(min(3, len(fixtures)))
             for i, f in enumerate(fixtures[:3]):
@@ -219,7 +230,7 @@ if st.session_state.view == 'home':
                         st.session_state.view = 'match'
                         st.rerun()
         else:
-            st.info("Aucun match officiel programmé pour cette équipe.")
+            st.info("Aucun match officiel programmé trouvé pour les 90 prochains jours.")
 
     st.markdown("---")
     st.markdown("### 🏆 MATCHS MAJEURS DU JOUR")

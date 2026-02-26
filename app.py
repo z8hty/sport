@@ -23,6 +23,10 @@ BASE_URL = "https://v3.football.api-sports.io"
 if 'view' not in st.session_state:
     st.session_state.view = 'home'
 
+# Initialisation du Bankroll (Vault)
+if 'vault' not in st.session_state:
+    st.session_state.vault = pd.DataFrame(columns=["Date", "Match", "Pari", "Cote", "Mise", "Gain Potentiel"])
+
 # --- STYLE CSS ---
 st.markdown("""
     <style>
@@ -50,7 +54,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- GÉNÉRATEUR DE STATS COHÉRENTES ---
+# --- GÉNÉRATEUR DE STATS ET COTES ---
 def generate_team_stats(team_name):
     """Génère des stats uniques mais stables basées sur le nom du club"""
     seed = int(hashlib.md5(team_name.encode()).hexdigest(), 16)
@@ -66,6 +70,24 @@ def generate_team_stats(team_name):
         'vuln': random.choice(["Faible", "Moyenne", "Élevée", "Critique"])
     }
 
+def get_match_odds(fixture_id, stats_h, stats_a):
+    """Récupère les cotes via API ou génère des cotes réalistes basées sur les stats"""
+    if fixture_id:
+        try:
+            r = requests.get(f"{BASE_URL}/odds", headers=HEADERS, params={"fixture": fixture_id}, timeout=5).json()
+            if r.get('response'):
+                bets = r['response'][0]['bookmakers'][0]['bets'][0]['values']
+                return {b['value']: str(b['odd']) for b in bets}
+        except: pass
+    
+    # Fallback : Génération de cotes logiques si API indisponible/vide
+    diff = (stats_h['atk'] + stats_h['def']) - (stats_a['atk'] + stats_a['def'])
+    if diff > 15: return {"Home": "1.35", "Draw": "4.50", "Away": "7.50"}
+    elif diff < -15: return {"Home": "6.50", "Draw": "4.20", "Away": "1.45"}
+    elif diff > 5: return {"Home": "1.85", "Draw": "3.50", "Away": "3.90"}
+    elif diff < -5: return {"Home": "3.80", "Draw": "3.40", "Away": "1.95"}
+    else: return {"Home": "2.55", "Draw": "3.10", "Away": "2.65"}
+
 # --- FONCTIONS API ---
 @st.cache_data(ttl=3600)
 def fetch_top_matches(days_offset=0):
@@ -78,27 +100,27 @@ def fetch_top_matches(days_offset=0):
         return filtered[:6] if filtered else fixtures[:6]
     except: return []
 
-def get_ai_prediction(home, away, stats_h, stats_a):
+def get_ai_prediction(home, away, stats_h, stats_a, odds):
     client = Groq(api_key=GROQ_KEY)
-    prompt = f"""Tu es un analyste expert en paris sportifs (recherche de Value Bet).
+    prompt = f"""Tu es un analyste expert en paris sportifs. Ton but est de trouver la 'Value' mathématique.
     Analyse ce match précis : {home} vs {away}.
     
-    VOICI LES DONNÉES STATISTIQUES À PRENDRE EN COMPTE :
-    - {home} (Domicile) : Attaque {stats_h['atk']}/100, Défense {stats_h['def']}/100, Dynamique {stats_h['dyn']}/100, xG par match {stats_h['xg']}.
-    - {away} (Extérieur) : Attaque {stats_a['atk']}/100, Défense {stats_a['def']}/100, Dynamique {stats_a['dyn']}/100, xG par match {stats_a['xg']}.
+    DONNÉES STATISTIQUES :
+    - {home} (Dom) : Attaque {stats_h['atk']}/100, Défense {stats_h['def']}/100, Dynamique {stats_h['dyn']}/100, xG par match {stats_h['xg']}.
+    - {away} (Ext) : Attaque {stats_a['atk']}/100, Défense {stats_a['def']}/100, Dynamique {stats_a['dyn']}/100, xG par match {stats_a['xg']}.
+    
+    COTES DU MATCH (1X2) :
+    Victoire Domicile: {odds.get('Home', 'N/A')} | Nul: {odds.get('Draw', 'N/A')} | Victoire Extérieur: {odds.get('Away', 'N/A')}
     
     CONSIGNES STRICTES :
-    1. Sois direct, honnête et analytique. Pas d'intro bateau.
-    2. Utilise les stats fournies ci-dessus pour justifier tes choix. Si une équipe a une attaque faible et l'autre une grosse défense, adapte le prono !
-    3. N'invente pas de cotes ultra-précises (donne des fourchettes attendues, ex: "Cote ~1.80").
-    4. Sors des sentiers battus. Ne propose pas toujours "+2.5 buts". Cherche l'underdog, le clean sheet, ou le nul si les stats s'équilibrent.
+    1. Sois direct et analytique. Analyse si les cotes proposées reflètent vraiment les statistiques.
+    2. Sors des pronos classiques. Cherche l'underdog, le match nul, ou un pari précis si la cote est belle (ex: Victoire Extérieur est une 'Value' vu leur défense).
 
     DONNE EXACTEMENT 3 CHOIX DE PARIS :
-    1. 🟢 PROFIL CONSERVATEUR (Sécurisation du capital). Explication basée sur la data.
-    2. 🟡 PROFIL VALUE BET (Le vrai bon coup mathématique). Explication basée sur la data.
-    3. 🔴 PROFIL AGRESSIF (Scénario de match précis, grosse cote). Explication basée sur la data.
+    1. 🟢 PROFIL SAFE (Pari très probable). Précise la cote estimée et justifie avec la data.
+    2. 🟡 PROFIL VALUE BET (L'erreur du bookmaker, le vrai bon coup). Base-toi sur les cotes 1X2 fournies pour justifier.
+    3. 🔴 PROFIL AGRESSIF (Scénario précis, grosse cote). Justifie avec la data.
     """
-    # Température à 0.5 pour allier logique et adaptabilité
     chat = client.chat.completions.create(model="llama-3.3-70b-versatile", messages=[{"role": "user", "content": prompt}], temperature=0.5)
     return chat.choices[0].message.content
 
@@ -162,10 +184,12 @@ if st.session_state.view == 'home':
 elif st.session_state.view == 'match':
     m = st.session_state.match_data
     h, a = m['teams']['home']['name'], m['teams']['away']['name']
+    fix_id = m.get('fixture', {}).get('id', None)
     
-    # Génération des stats spécifiques pour ces deux équipes
+    # Génération/Récupération des Datas
     stats_h = generate_team_stats(h)
     stats_a = generate_team_stats(a)
+    odds = get_match_odds(fix_id, stats_h, stats_a)
     
     col_btn, _ = st.columns([1, 5])
     with col_btn:
@@ -180,16 +204,17 @@ elif st.session_state.view == 'match':
             <img src="{m['teams']['home']['logo']}" width="60" style="vertical-align:middle; margin-right:20px;">
             <span style='font-size:35px; font-weight:900; color:white; vertical-align:middle;'>{h} vs {a}</span>
             <img src="{m['teams']['away']['logo']}" width="60" style="vertical-align:middle; margin-left:20px;">
+            <p style='color:#00ff88; margin-top:10px; font-size:14px;'>COTES 1X2 : 1 ({odds.get('Home', '-')}) | X ({odds.get('Draw', '-')}) | 2 ({odds.get('Away', '-')})</p>
         </div>
     """, unsafe_allow_html=True)
     
-    t1, t2 = st.tabs(["🧠 PRONOSTICS & PROFILS", "📊 DATA METRICS"])
+    t1, t2, t3 = st.tabs(["🧠 PRONOSTICS & PROFILS", "📊 DATA METRICS", "🏦 BANKROLL (VAULT)"])
     
     with t1:
         st.markdown("### L'ORACLE PREDICTECH")
         if st.button("GÉNÉRER LES CONSEILS DE PARIS", use_container_width=False):
-            with st.spinner("Llama-3.3 analyse les données du match..."):
-                prediction = get_ai_prediction(h, a, stats_h, stats_a)
+            with st.spinner("Llama-3.3 croise les statistiques et les cotes..."):
+                prediction = get_ai_prediction(h, a, stats_h, stats_a, odds)
                 st.markdown(f"""
                     <div style='background:#11141b; padding:30px; border-radius:15px; border:1px solid #00ff88; font-size:15px; line-height:1.7;'>
                         {prediction}
@@ -224,3 +249,42 @@ elif st.session_state.view == 'match':
                         <span style='color:#60efff; font-weight:bold;'>{v2}</span>
                     </div>
                 """, unsafe_allow_html=True)
+
+    with t3:
+        st.markdown("### 🏦 ARCHIVER UN PARI")
+        c1, c2, c3, c4 = st.columns(4)
+        pari_nom = c1.text_input("Pari (ex: Victoire Arsenal)", "")
+        pari_cote = c2.number_input("Cote", min_value=1.01, value=1.85, step=0.05)
+        pari_mise = c3.number_input("Mise (€)", min_value=1, value=10, step=5)
+        
+        with c4:
+            st.markdown("<br>", unsafe_allow_html=True)
+            if st.button("SAUVEGARDER LE TICKET", use_container_width=True):
+                if pari_nom:
+                    new_bet = {
+                        "Date": datetime.now().strftime("%d/%m/%Y"),
+                        "Match": f"{h} vs {a}",
+                        "Pari": pari_nom,
+                        "Cote": pari_cote,
+                        "Mise": pari_mise,
+                        "Gain Potentiel": round(pari_mise * pari_cote, 2)
+                    }
+                    # Ajout au dataframe de session
+                    st.session_state.vault = pd.concat([st.session_state.vault, pd.DataFrame([new_bet])], ignore_index=True)
+                    st.success("Pari archivé dans le Vault !")
+                else:
+                    st.error("Précise le nom du pari.")
+        
+        st.markdown("---")
+        st.markdown("### 📊 HISTORIQUE DU VAULT")
+        if not st.session_state.vault.empty:
+            st.dataframe(st.session_state.vault, use_container_width=True, hide_index=True)
+            
+            total_mise = st.session_state.vault['Mise'].sum()
+            total_gain = st.session_state.vault['Gain Potentiel'].sum()
+            
+            c_res1, c_res2 = st.columns(2)
+            c_res1.metric("Capital Engagé", f"{total_mise} €")
+            c_res2.metric("Retour Potentiel Maximum", f"{total_gain} €", f"+{round(total_gain - total_mise, 2)} € de bénef")
+        else:
+            st.info("Aucun pari enregistré pour le moment. Fais ton analyse et valide ton premier ticket !")

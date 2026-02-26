@@ -56,31 +56,53 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- MOTEUR DE RECHERCHE OPTIMISÉ (ANTI 10 REQ/MIN) ---
+# --- NOUVEAU MOTEUR : ASPIRATION GLOBALE (ANTI-BLOCAGE) ---
 @st.cache_data(ttl=3600, show_spinner=False)
-def fetch_fixtures_by_date(date_str):
-    time.sleep(0.4) # Pause furtive pour ne pas déclencher l'alarme API
-    r = requests.get(f"{BASE_URL}/fixtures", headers=HEADERS, params={"date": date_str, "timezone": "Europe/Paris"}, timeout=10).json()
-    if r.get('errors'):
-        raise Exception("Rate limit hit")
-    return r.get('response', [])
+def load_global_calendar():
+    """Télécharge le calendrier mondial des 7 prochains jours une seule fois. Contourne les limites API."""
+    global_fixtures = []
+    for i in range(7):
+        date_str = (datetime.now() + timedelta(days=i)).strftime("%Y-%m-%d")
+        try:
+            r = requests.get(f"{BASE_URL}/fixtures", headers=HEADERS, params={"date": date_str, "timezone": "Europe/Paris"}, timeout=10).json()
+            if not r.get('errors'):
+                global_fixtures.extend(r.get('response', []))
+            time.sleep(0.3) # Micro pause pour ne pas affoler l'API
+        except:
+            pass
+    return global_fixtures
+
+# Chargement silencieux en arrière-plan
+if 'calendar_loaded' not in st.session_state:
+    with st.spinner("🌍 Initialisation de la base de données mondiale (Patiente 3 sec)..."):
+        load_global_calendar()
+        st.session_state.calendar_loaded = True
 
 def fetch_top_matches():
-    target_date = datetime.now().strftime("%Y-%m-%d")
-    try:
-        fixtures = fetch_fixtures_by_date(target_date)
-        top_leagues = [2, 3, 39, 61, 78, 135, 140]
-        filtered = [f for f in fixtures if f['league']['id'] in top_leagues]
-        
-        # Si pas de gros matchs aujourd'hui, on cherche discrètement demain
-        if not filtered:
-            target_date_tmrw = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
-            fixtures_tmrw = fetch_fixtures_by_date(target_date_tmrw)
-            filtered = [f for f in fixtures_tmrw if f['league']['id'] in top_leagues]
-            
-        return filtered[:6]
-    except:
-        return []
+    fixtures = load_global_calendar()
+    top_leagues = [2, 3, 39, 61, 78, 135, 140]
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    tomorrow_str = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
+    
+    # On cherche en priorité les gros matchs d'aujourd'hui
+    today_matches = [f for f in fixtures if f['league']['id'] in top_leagues and f['fixture']['date'].startswith(today_str)]
+    if today_matches: return today_matches[:6]
+    
+    # Sinon ceux de demain
+    tmrw_matches = [f for f in fixtures if f['league']['id'] in top_leagues and f['fixture']['date'].startswith(tomorrow_str)]
+    return tmrw_matches[:6]
+
+def fetch_team_fixtures_local(team_id):
+    """Cherche instantanément dans la base de données pré-téléchargée (0 requête API)"""
+    all_fixtures = load_global_calendar()
+    valid_statuses = ['NS', 'TBD', 'PST', '1H', 'HT', '2H', 'ET', 'P']
+    
+    team_matches = [f for f in all_fixtures if 
+                    (f['teams']['home']['id'] == team_id or f['teams']['away']['id'] == team_id) 
+                    and f['fixture']['status']['short'] in valid_statuses]
+    
+    team_matches.sort(key=lambda x: x['fixture']['timestamp'])
+    return team_matches[:3]
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def fetch_teams(name):
@@ -89,32 +111,9 @@ def fetch_teams(name):
         return r.get('response', [])
     except: return []
 
-def fetch_team_fixtures(team_id):
-    upcoming = []
-    valid_statuses = ['NS', 'TBD', 'PST', '1H', 'HT', '2H', 'ET', 'P']
-    
-    # On scanne sur 5 jours pile poil (ex: Jeudi -> Lundi). Parfait pour le week-end, et évite la limite API.
-    for i in range(5):
-        date_str = (datetime.now() + timedelta(days=i)).strftime("%Y-%m-%d")
-        try:
-            day_fixtures = fetch_fixtures_by_date(date_str)
-            for f in day_fixtures:
-                if f['teams']['home']['id'] == team_id or f['teams']['away']['id'] == team_id:
-                    if f['fixture']['status']['short'] in valid_statuses:
-                        upcoming.append(f)
-        except Exception:
-            # Si l'API coupe le courant, on arrête silencieusement la boucle et on renvoie ce qu'on a déjà trouvé
-            break
-            
-        if len(upcoming) >= 2: # Dès qu'on a les 2 prochains matchs, on stoppe pour économiser ton quota
-            break
-            
-    return upcoming[:2]
-
 @st.cache_data(ttl=3600, show_spinner=False)
 def fetch_standings(league_id):
     try:
-        # On force la saison 2024 (Format API officiel pour la saison européenne 24/25) pour éviter l'erreur Free Plan
         r = requests.get(f"{BASE_URL}/standings", headers=HEADERS, params={"league": league_id, "season": 2024}, timeout=10).json()
         if r.get('errors'): raise Exception()
         return r.get('response', [])
@@ -228,7 +227,7 @@ if st.session_state.view == 'home':
     st.markdown("### 🔍 RECHERCHER UN CLUB")
     with st.form("search_form"):
         col1, col2 = st.columns([3, 1])
-        query = col1.text_input("", placeholder="Chercher une équipe (ex: Marseille, Arsenal)...", label_visibility="collapsed")
+        query = col1.text_input("", placeholder="Chercher une équipe (ex: Marseille, Real Madrid)...", label_visibility="collapsed")
         submit_search = col2.form_submit_button("Rechercher", use_container_width=True)
     
     if submit_search and query:
@@ -251,12 +250,12 @@ if st.session_state.view == 'home':
                     st.rerun()
 
     if st.session_state.get('selected_team_id'):
-        st.markdown(f"#### 🗓️ MATCHS DE {st.session_state.selected_team_name.upper()} (5 PROCHAINS JOURS)")
-        with st.spinner("Scan du calendrier du week-end en cours..."):
-            fixtures = fetch_team_fixtures(st.session_state.selected_team_id)
-            
+        st.markdown(f"#### 🗓️ MATCHS DE {st.session_state.selected_team_name.upper()} (7 PROCHAINS JOURS)")
+        # Recherche locale instantanée, pas de spinner d'attente car c'est en mémoire
+        fixtures = fetch_team_fixtures_local(st.session_state.selected_team_id)
+        
         if fixtures:
-            f_cols = st.columns(min(2, len(fixtures)))
+            f_cols = st.columns(min(3, len(fixtures)))
             for i, f in enumerate(fixtures):
                 with f_cols[i]:
                     date = datetime.fromisoformat(f['fixture']['date'].replace('Z','+00:00')).strftime('%d/%m à %H:%M')
@@ -272,12 +271,11 @@ if st.session_state.view == 'home':
                         st.session_state.view = 'match'
                         st.rerun()
         else:
-            st.info("Aucun match trouvé pour ce club d'ici les 5 prochains jours.")
+            st.info("Aucun match prévu pour ce club dans les 7 prochains jours.")
 
     st.markdown("---")
     st.markdown("### 🏆 MATCHS MAJEURS DU JOUR")
-    with st.spinner("Chargement du programme..."):
-        matches = fetch_top_matches()
+    matches = fetch_top_matches()
 
     if matches:
         cols_m = st.columns(3)

@@ -53,49 +53,37 @@ st.markdown("""
     .btn-back>button:hover { background: #8892b0; color: #05070a; box-shadow: none; }
     .prob-bar-bg { background-color: #1a1c23; border-radius: 5px; height: 10px; width: 100%; margin-top: 5px; overflow: hidden; }
     .prob-bar-fill { height: 100%; background: linear-gradient(90deg, #00ff88, #60efff); transition: 1s ease-in-out; }
-    
-    /* Style pour le Selectbox */
-    div[data-baseweb="select"] > div { background-color: #11141b; border-color: #2d303e; color: white; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- NOUVELLE MÉTHODE : TÉLÉCHARGEMENT DES LIGUES (INFALLIBLE) ---
+# --- MOTEUR D'ASPIRATION GLOBALE (ANTI-BLOCAGE API) ---
 @st.cache_data(ttl=3600, show_spinner=False)
-def load_all_top_fixtures():
-    """Télécharge les matchs des 7 prochains jours par Ligue (impossible à bloquer par l'API)"""
-    # L1 (61), PL (39), Liga (140), Serie A (135), Bundes (78), LDC (2), Europa (3)
-    leagues = [61, 39, 140, 135, 78, 2, 3] 
+def fetch_global_calendar():
+    """Télécharge le calendrier mondial des 6 prochains jours via le paramètre 'date' (100% inblocable)"""
     all_matches = []
-    
-    date_from = datetime.now().strftime("%Y-%m-%d")
-    date_to = (datetime.now() + timedelta(days=7)).strftime("%Y-%m-%d")
-    
-    for lid in leagues:
+    for i in range(6):
+        date_str = (datetime.now() + timedelta(days=i)).strftime("%Y-%m-%d")
         try:
-            r = requests.get(f"{BASE_URL}/fixtures", headers=HEADERS, params={
-                "league": lid,
-                "season": 2024,
-                "from": date_from,
-                "to": date_to,
-                "timezone": "Europe/Paris"
-            }, timeout=5).json()
+            r = requests.get(f"{BASE_URL}/fixtures", headers=HEADERS, params={"date": date_str, "timezone": "Europe/Paris"}, timeout=8).json()
             if r.get('response'):
                 all_matches.extend(r['response'])
-            time.sleep(0.3) # Sécurité pour ne pas déclencher le Rate Limit
-        except:
-            continue
-            
-    # On filtre pour ne garder que les matchs non joués
-    valid_statuses = ['NS', 'TBD', 'PST']
-    upcoming = [m for m in all_matches if m['fixture']['status']['short'] in valid_statuses]
-    upcoming.sort(key=lambda x: x['fixture']['timestamp'])
-    
-    return upcoming
+            time.sleep(0.3) # Micro-pause pour respecter la limite de vitesse
+        except: pass
+    return all_matches
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def fetch_teams(name):
+    try:
+        r = requests.get(f"{BASE_URL}/teams", headers=HEADERS, params={"search": name}, timeout=10).json()
+        return r.get('response', [])
+    except: return []
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def fetch_standings(league_id):
     try:
+        # On force la saison 2024 pour éviter l'erreur Free Plan
         r = requests.get(f"{BASE_URL}/standings", headers=HEADERS, params={"league": league_id, "season": 2024}, timeout=10).json()
+        if r.get('errors'): raise Exception()
         return r.get('response', [])
     except: return []
 
@@ -113,13 +101,20 @@ def get_match_odds(fixture_id):
 def get_fallback_stats(team_name):
     seed = int(hashlib.md5(team_name.encode()).hexdigest(), 16)
     random.seed(seed)
+    
     if team_name in ["Real Madrid", "Manchester City", "Bayern Munich", "Liverpool", "Arsenal"]: atk, df = 90, 85
     elif team_name in ["Paris Saint Germain", "Barcelona", "Inter", "Bayer Leverkusen", "Juventus"]: atk, df = 85, 82
     elif team_name in ["AC Milan", "Tottenham", "Chelsea", "Manchester United", "Borussia Dortmund"]: atk, df = 81, 78
     elif team_name in ["Marseille", "Lille", "Monaco", "Newcastle", "AS Roma", "Benfica"]: atk, df = 77, 75
     else: atk, df = 73, 72
 
-    return {'atk': atk + random.randint(-2, 2), 'def': df + random.randint(-2, 2), 'dyn': random.randint(65, 85), 'xg': round((atk / 100) * 2.2, 2), 'form_str': 'Non dispo'}
+    return {
+        'atk': atk + random.randint(-2, 2),
+        'def': df + random.randint(-2, 2),
+        'dyn': random.randint(65, 85),
+        'xg': round((atk / 100) * 2.2, 2),
+        'form_str': 'Simulé'
+    }
 
 def calculate_true_stats(team_id, team_name, standings_data):
     if not standings_data: return get_fallback_stats(team_name)
@@ -177,7 +172,7 @@ def get_ai_prediction(home, away, stats_h, stats_a, odds):
     - {home} (Dom) : Attaque {stats_h['atk']}/100, Défense {stats_h['def']}/100, Forme {stats_h['dyn']}/100, Buts {stats_h['xg']}.
     - {away} (Ext) : Attaque {stats_a['atk']}/100, Défense {stats_a['def']}/100, Forme {stats_a['dyn']}/100, Buts {stats_a['xg']}.
     
-    COTES OFFICIELLES (1X2) : 1 ({odds.get('Home', 'Non dispo')}) | X ({odds.get('Draw', 'Non dispo')}) | 2 ({odds.get('Away', 'Non dispo')})
+    COTES (1X2) : 1 ({odds.get('Home', 'Non dispo')}) | X ({odds.get('Draw', 'Non dispo')}) | 2 ({odds.get('Away', 'Non dispo')})
     
     CONSIGNES STRICTES :
     1. Base-toi UNIQUEMENT sur ces mathématiques.
@@ -197,38 +192,85 @@ if st.session_state.view == 'home':
     st.markdown("<h1 class='main-title'>PREDICTECH.OS</h1>", unsafe_allow_html=True)
     st.markdown("<p style='text-align:center; color:#8892b0; margin-bottom:40px;'>LE TERMINAL DES PARIS INTELLIGENTS</p>", unsafe_allow_html=True)
 
-    with st.spinner("Synchronisation avec la base de données européenne..."):
-        all_matches = load_all_top_fixtures()
+    # Chargement du calendrier en mémoire au démarrage (ultra rapide)
+    with st.spinner("🔄 Synchronisation de la base de données (quelques secondes)..."):
+        calendar_data = fetch_global_calendar()
 
-    st.markdown("### 🎯 SÉLECTIONNER UN MATCH (7 PROCHAINS JOURS)")
-    if all_matches:
-        # Création d'un dictionnaire pour le menu déroulant
-        match_options = {}
-        for m in all_matches:
-            date_str = datetime.fromisoformat(m['fixture']['date'].replace('Z','+00:00')).strftime('%d/%m')
-            label = f"{date_str} | {m['teams']['home']['name']} vs {m['teams']['away']['name']} ({m['league']['name']})"
-            match_options[label] = m
-
-        col_sel, col_btn = st.columns([3, 1])
-        selected_match_label = col_sel.selectbox("Choisis une affiche officielle :", options=list(match_options.keys()), index=None, placeholder="Tape le nom d'un club (ex: Marseille)...")
-        
-        with col_btn:
-            st.markdown("<br>", unsafe_allow_html=True)
-            if st.button("LANCER L'ORACLE", use_container_width=True):
-                if selected_match_label:
-                    st.session_state.match_data = match_options[selected_match_label]
-                    st.session_state.view = 'match'
+    st.markdown("### 🔍 RECHERCHER UN CLUB")
+    with st.form("search_form"):
+        col1, col2 = st.columns([3, 1])
+        query = col1.text_input("", placeholder="Chercher une équipe (ex: Marseille, Arsenal)...", label_visibility="collapsed")
+        submit_search = col2.form_submit_button("Rechercher", use_container_width=True)
+    
+    if submit_search and query:
+        with st.spinner("Recherche de l'équipe..."):
+            teams = fetch_teams(query)
+            if teams:
+                st.session_state.search_results = teams
+                st.session_state.selected_team_id = None
+            else:
+                st.error("Aucune équipe trouvée.")
+                
+    if st.session_state.get('search_results') and not st.session_state.get('selected_team_id'):
+        cols = st.columns(len(st.session_state.search_results[:4]))
+        for i, res in enumerate(st.session_state.search_results[:4]):
+            with cols[i]:
+                st.markdown(f"<div style='text-align:center; margin-bottom:10px;'><img src='{res['team']['logo']}' width='60'></div>", unsafe_allow_html=True)
+                if st.button(res['team']['name'], key=f"t_{res['team']['id']}", use_container_width=True):
+                    st.session_state.selected_team_id = res['team']['id']
+                    st.session_state.selected_team_name = res['team']['name']
                     st.rerun()
-                else:
-                    st.error("Sélectionne un match dans la liste.")
-    else:
-        st.error("Impossible de récupérer les matchs. L'API est temporairement indisponible.")
+
+    if st.session_state.get('selected_team_id'):
+        st.markdown(f"#### 🗓️ MATCHS DE {st.session_state.selected_team_name.upper()} (6 PROCHAINS JOURS)")
+        
+        # Recherche INSTANTANÉE dans la mémoire (0 requête API)
+        valid_statuses = ['NS', 'TBD', 'PST', '1H', 'HT', '2H', 'ET', 'P']
+        team_matches = [m for m in calendar_data if 
+                        (m['teams']['home']['id'] == st.session_state.selected_team_id or 
+                         m['teams']['away']['id'] == st.session_state.selected_team_id) 
+                        and m['fixture']['status']['short'] in valid_statuses]
+        team_matches.sort(key=lambda x: x['fixture']['timestamp'])
+        
+        if team_matches:
+            f_cols = st.columns(min(3, len(team_matches)))
+            for i, f in enumerate(team_matches[:3]):
+                with f_cols[i]:
+                    date = datetime.fromisoformat(f['fixture']['date'].replace('Z','+00:00')).strftime('%d/%m à %H:%M')
+                    st.markdown(f"""
+                        <div class='match-card'>
+                            <p style='color:#00ff88; font-size:11px; font-weight:bold; margin:0;'>{f['league']['name']}</p>
+                            <p style='font-size:13px; font-weight:bold; margin:10px 0;'>{f['teams']['home']['name']} <br>vs<br> {f['teams']['away']['name']}</p>
+                            <p style='color:#8892b0; font-size:12px; margin:0;'>{date}</p>
+                        </div>
+                    """, unsafe_allow_html=True)
+                    if st.button("ANALYSER", key=f"fbtn_{f['fixture']['id']}", use_container_width=True):
+                        st.session_state.match_data = f
+                        st.session_state.view = 'match'
+                        st.rerun()
+        else:
+            st.info("Aucun match officiel prévu pour ce club dans les 6 prochains jours.")
 
     st.markdown("---")
-    st.markdown("### 🏆 MATCHS MAJEURS À VENIR")
-    if all_matches:
+    st.markdown("### 🏆 MATCHS MAJEURS DU JOUR")
+    
+    # Filtre instantané sur les grosses ligues
+    top_leagues = [2, 3, 39, 61, 78, 135, 140]
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    tomorrow_str = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
+    
+    top_matches = [m for m in calendar_data if m['league']['id'] in top_leagues and m['fixture']['status']['short'] in ['NS', 'TBD', 'PST']]
+    display_matches = [m for m in top_matches if m['fixture']['date'].startswith(today_str)]
+    
+    # S'il n'y a pas de match majeur aujourd'hui, on affiche ceux de demain
+    if len(display_matches) < 3:
+        display_matches = [m for m in top_matches if m['fixture']['date'].startswith(tomorrow_str)]
+    if not display_matches:
+        display_matches = top_matches # Fallback sécurité
+
+    if display_matches:
         cols_m = st.columns(3)
-        for i, f in enumerate(all_matches[:6]): # Affiche les 6 matchs les plus imminents
+        for i, f in enumerate(display_matches[:6]):
             with cols_m[i % 3]:
                 date = datetime.fromisoformat(f['fixture']['date'].replace('Z','+00:00')).strftime('%d/%m à %H:%M')
                 st.markdown(f"""
@@ -264,7 +306,7 @@ elif st.session_state.view == 'match':
             st.rerun()
         st.markdown("</div>", unsafe_allow_html=True)
 
-    with st.spinner("Calcul des mathématiques du match (Classement officiel)..."):
+    with st.spinner("Calcul des mathématiques du match..."):
         standings = fetch_standings(league_id)
         stats_h = calculate_true_stats(h_id, h, standings)
         stats_a = calculate_true_stats(a_id, a, standings)

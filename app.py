@@ -105,7 +105,6 @@ def get_match_odds(fixture_id):
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def fetch_h2h(team_id_1, team_id_2):
-    """Récupère l'historique des 3 dernières confrontations"""
     try:
         r = requests.get(f"{BASE_URL}/fixtures/headtohead", headers=HEADERS, params={"h2h": f"{team_id_1}-{team_id_2}", "last": 3}, timeout=5).json()
         return r.get('response', [])
@@ -150,7 +149,7 @@ def calculate_true_stats(team_id, team_name, standings_data):
     return get_fallback_stats(team_name)
 
 def calculate_probabilities(stats_h, stats_a):
-    power_h = stats_h['atk'] + stats_h['def'] + stats_h['dyn'] + 10 # Avantage domicile
+    power_h = stats_h['atk'] + stats_h['def'] + stats_h['dyn'] + 10
     power_a = stats_a['atk'] + stats_a['def'] + stats_a['dyn']
     if power_h == 0 and power_a == 0: return 33, 34, 33 
     
@@ -160,7 +159,6 @@ def calculate_probabilities(stats_h, stats_a):
     return prob_h, 100 - prob_h - prob_a, prob_a
 
 def detect_value_bet(prob_h, prob_n, prob_a, odds, home_name, away_name):
-    """Calcul du TRI mathématique : (Probabilité * Cote) > 1.05"""
     value_msg = ""
     try:
         if 'Home' in odds and float(odds['Home']) * (prob_h / 100) > 1.05:
@@ -181,8 +179,8 @@ def get_ai_prediction(home, away, stats_h, stats_a, odds, value_msg, h2h_data):
     Analyse ce match : {home} vs {away}.
     
     DATA PURE :
-    - {home} (Dom) : Attaque {stats_h['atk']}/100, Défense {stats_h['def']}/100, Forme {stats_h['dyn']}/100, Buts {stats_h['xg']}.
-    - {away} (Ext) : Attaque {stats_a['atk']}/100, Défense {stats_a['def']}/100, Forme {stats_a['dyn']}/100, Buts {stats_a['xg']}.
+    - {home} (Dom) : Attaque {stats_h['atk']}/100, Défense {stats_h['def']}/100, Forme {stats_h['dyn']}/100, Buts/match {stats_h['xg']}.
+    - {away} (Ext) : Attaque {stats_a['atk']}/100, Défense {stats_a['def']}/100, Forme {stats_a['dyn']}/100, Buts/match {stats_a['xg']}.
     {h2h_text}
     
     COTES ET VALUE :
@@ -192,13 +190,15 @@ def get_ai_prediction(home, away, stats_h, stats_a, odds, value_msg, h2h_data):
     CONSIGNES STRICTES :
     1. Base-toi UNIQUEMENT sur ces mathématiques et l'historique pour justifier tes choix.
     2. Sois direct, factuel et précis. Ne fais pas d'introduction bavarde.
+    3. VARIE TES TYPES DE PARIS : Ne propose pas toujours la même formule. Adapte-toi à la physionomie du match (ex: si deux grosses défenses, propose un under. Si grosse diff d'attaque, propose un handicap).
 
     DONNE EXACTEMENT 3 CHOIX DE PARIS CLAIRS :
-    1. 🟢 PARI SAFE (Sécurité maximale) : Double Chance (ex: 1N), Over/Under buts, ou pari type 'L'une des équipes marque'. Explique mathématiquement.
-    2. 🟡 PARI AUDACIEUX (Logique mais mieux coté) : Pari combiné (ex: Victoire + les deux marquent), ou équipe gagne une mi-temps. Justifie-le avec la différence de stats.
-    3. 🔴 COUP DE POKER (Le ticket fun) : Score exact très précis ou un écart de but, basé sur la moyenne des buts (xG) et l'historique H2H.
+    1. 🟢 PARI SAFE (Sécurité maximale) : Un pari très probable (Double Chance, Over/Under buts, ou équipe marque). Explique mathématiquement pourquoi.
+    2. 🟡 PARI AUDACIEUX (Logique mais mieux coté) : Un pari original et réfléchi selon les stats (Handicap, Mi-temps avec le plus de buts, Vainqueur + Over/Under...). Ne te contente pas de 'Victoire + BTTS'. Justifie la value.
+    3. 🔴 COUP DE POKER (Le ticket fun) : Un score exact ou un écart de but très précis, basé sur la moyenne de buts et l'historique.
     """
-    chat = client.chat.completions.create(model="llama-3.3-70b-versatile", messages=[{"role": "user", "content": prompt}], temperature=0.3)
+    # Température à 0.5 pour forcer des réponses moins répétitives et plus adaptées
+    chat = client.chat.completions.create(model="llama-3.3-70b-versatile", messages=[{"role": "user", "content": prompt}], temperature=0.5)
     return chat.choices[0].message.content
 
 # --- INTERFACE DE GRILLE ---
@@ -291,8 +291,6 @@ elif st.session_state.view == 'match':
         h2h = fetch_h2h(h_id, a_id)
         
         value_alert = detect_value_bet(prob_h, prob_n, prob_a, odds, h, a)
-        
-        # Gestion des badges d'estimation
         est_badge = " <span style='font-size:12px; color:#8892b0; font-weight:normal;'>(Stats Estimées)</span>" if stats_h.get('is_fallback') else ""
 
     st.markdown(f"""
@@ -347,7 +345,7 @@ elif st.session_state.view == 'match':
             st.plotly_chart(fig, use_container_width=True)
             
             if h2h:
-                st.markdown("<p style='color:#60efff; font-weight:bold; margin-top:10px;'>HISTORIQUE DES CONFRONTATIONS</p>", unsafe_allow_html=True)
+                st.markdown("<p style='color:#60efff; font-weight:bold; margin-top:10px; text-align:center;'>HISTORIQUE DES CONFRONTATIONS</p>", unsafe_allow_html=True)
                 for f in h2h:
                     st.markdown(f"<div class='h2h-box'>{f['teams']['home']['name']} <b>{f['goals']['home']} - {f['goals']['away']}</b> {f['teams']['away']['name']}</div>", unsafe_allow_html=True)
 

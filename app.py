@@ -67,7 +67,7 @@ st.markdown("""
     .value-badge { background: rgba(0, 255, 136, 0.1); color: #00ff88; border: 1px solid #00ff88; padding: 5px 15px; border-radius: 20px; font-size: 14px; font-weight: bold; display: block; margin: 15px auto; width: fit-content; text-align: center;}
     .h2h-box { background: #1a1c23; padding: 10px; border-radius: 8px; font-size: 13px; text-align: center; margin-bottom: 5px;}
     
-    /* Forcer les champs de cotes à être super visibles (Fond blanc, texte noir, bordure fluo) */
+    /* Forcer les champs de cotes à être super visibles */
     div[data-testid="stNumberInput"] input {
         background-color: #ffffff !important;
         color: #05070a !important;
@@ -117,7 +117,12 @@ def fetch_daily_catalog(date_str):
 @st.cache_data(ttl=3600, show_spinner=False)
 def fetch_standings(league_id):
     try:
-        r = requests.get(f"{BASE_URL}/standings", headers=HEADERS, params={"league": league_id, "season": 2024}, timeout=10).json()
+        # Calcul automatique de la saison en cours (plus jamais de stats obsolètes !)
+        current_month = datetime.now().month
+        current_year = datetime.now().year
+        current_season = current_year - 1 if current_month < 7 else current_year
+        
+        r = requests.get(f"{BASE_URL}/standings", headers=HEADERS, params={"league": league_id, "season": current_season}, timeout=10).json()
         return r.get('response', [])
     except: return []
 
@@ -346,7 +351,6 @@ elif st.session_state.view == 'match':
         st.markdown("<p style='color:#8892b0; font-size:13px;'>Les cotes de l'API sont pré-remplies. Modifie-les avec tes propres cotes pour recalculer la Value Bet mathématique avant d'interroger l'IA.</p>", unsafe_allow_html=True)
         
         c_odd1, c_odd2, c_odd3 = st.columns(3)
-        # Gestion propre des valeurs par défaut si l'API est vide
         val_h = float(api_odds['Home']) if api_odds.get('Home') else 0.0
         val_d = float(api_odds['Draw']) if api_odds.get('Draw') else 0.0
         val_a = float(api_odds['Away']) if api_odds.get('Away') else 0.0

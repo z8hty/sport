@@ -87,7 +87,7 @@ st.markdown("""
 
 # --- OUTILS DE FORMATAGE ET MATHS ---
 def format_form(form_string):
-    if not form_string or form_string == 'Non dispo': return "N/A"
+    if not form_string or form_string in ['Non dispo', 'N/A', 'Simulé']: return "N/A"
     form_string = form_string[-5:]
     return form_string.replace('W', '🟢').replace('D', '⚪').replace('L', '🔴')
 
@@ -115,20 +115,24 @@ def fetch_daily_catalog(date_str):
     except: return []
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def fetch_standings(league_id):
+def fetch_standings_v2(league_id):
+    """Fonction V2 avec gestion des groupes LDC et sécurité Anti-Spam API"""
     try:
-        # Calcul automatique de la saison en cours (plus jamais de stats obsolètes !)
         current_month = datetime.now().month
         current_year = datetime.now().year
-        current_season = current_year - 1 if current_month < 7 else current_year
+        current_season = current_year - 1 if current_month < 8 else current_year
         
+        time.sleep(0.4) # Pause de sécurité
         r = requests.get(f"{BASE_URL}/standings", headers=HEADERS, params={"league": league_id, "season": current_season}, timeout=10).json()
+        if r.get('errors'): 
+            raise Exception("API Limit Hit")
         return r.get('response', [])
     except: return []
 
 def get_match_odds(fixture_id):
     if fixture_id:
         try:
+            time.sleep(0.4) # Pause de sécurité
             r = requests.get(f"{BASE_URL}/odds", headers=HEADERS, params={"fixture": fixture_id}, timeout=5).json()
             if r.get('response'):
                 bets = r['response'][0]['bookmakers'][0]['bets'][0]['values']
@@ -137,9 +141,12 @@ def get_match_odds(fixture_id):
     return {}
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def fetch_h2h(team_id_1, team_id_2):
+def fetch_h2h_v2(team_id_1, team_id_2):
     try:
+        time.sleep(0.4) # Pause de sécurité
         r = requests.get(f"{BASE_URL}/fixtures/headtohead", headers=HEADERS, params={"h2h": f"{team_id_1}-{team_id_2}", "last": 3}, timeout=5).json()
+        if r.get('errors'):
+            raise Exception("API Limit Hit")
         return r.get('response', [])
     except: return []
 
@@ -150,7 +157,7 @@ def get_fallback_stats(team_name):
     if team_name in ["Real Madrid", "Manchester City", "Bayern Munich", "Liverpool", "Arsenal"]: atk, df = 90, 85
     elif team_name in ["Paris Saint Germain", "Barcelona", "Inter", "Bayer Leverkusen", "Juventus"]: atk, df = 85, 82
     elif team_name in ["AC Milan", "Tottenham", "Chelsea", "Manchester United", "Borussia Dortmund"]: atk, df = 81, 78
-    elif team_name in ["Marseille", "Lille", "Monaco", "Newcastle", "AS Roma", "Benfica"]: atk, df = 77, 75
+    elif team_name in ["Marseille", "Lille", "Monaco", "Newcastle", "AS Roma", "Benfica", "Lens"]: atk, df = 77, 75
     else: atk, df = 73, 72
 
     return {'atk': atk + random.randint(-2, 2), 'def': df + random.randint(-2, 2), 'dyn': random.randint(65, 85), 'xg': round((atk / 100) * 2.2, 2), 'form_str': 'Non dispo', 'rank': '-', 'is_fallback': True}
@@ -158,9 +165,15 @@ def get_fallback_stats(team_name):
 def calculate_true_stats(team_id, team_name, standings_data):
     if not standings_data: return get_fallback_stats(team_name)
     try:
-        league_standings = standings_data[0]['league']['standings'][0]
-        team_data = next((t for t in league_standings if t['team']['id'] == team_id), None)
+        # On extrait la liste des groupes (important pour LDC / Europa)
+        standings_lists = standings_data[0]['league']['standings']
+        team_data = None
         
+        # On fouille dans tous les groupes jusqu'à trouver l'équipe
+        for group in standings_lists:
+            team_data = next((t for t in group if t['team']['id'] == team_id), None)
+            if team_data: break
+            
         if team_data and team_data['all']['played'] > 0:
             played = team_data['all']['played']
             goals_for = team_data['all']['goals']['for']
@@ -174,7 +187,7 @@ def calculate_true_stats(team_id, team_name, standings_data):
             stats['atk'] = min(100, int((avg_gf / 2.5) * 100))
             stats['def'] = max(10, min(100, int(100 - ((avg_ga / 2.0) * 100))))
             stats['xg'] = round(avg_gf, 2)
-            stats['form_str'] = form
+            stats['form_str'] = form if form else 'N/A'
             stats['rank'] = team_data.get('rank', '-')
             stats['dyn'] = int((sum([3 if r == 'W' else 1 if r == 'D' else 0 for r in form]) / (len(form) * 3)) * 100) if form else 70
             stats['is_fallback'] = False
@@ -312,13 +325,13 @@ elif st.session_state.view == 'match':
         st.markdown("</div>", unsafe_allow_html=True)
 
     with st.spinner("Extraction des mathématiques et historiques..."):
-        standings = fetch_standings(league_id)
+        standings = fetch_standings_v2(league_id)
         stats_h = calculate_true_stats(h_id, h, standings)
         stats_a = calculate_true_stats(a_id, a, standings)
         prob_h, prob_n, prob_a = calculate_probabilities(stats_h, stats_a)
         prob_o25, prob_btts = calculate_goals_probabilities(stats_h['xg'], stats_a['xg'])
         api_odds = get_match_odds(fix_id)
-        h2h = fetch_h2h(h_id, a_id)
+        h2h = fetch_h2h_v2(h_id, a_id)
         
         est_badge = " <span style='font-size:12px; color:#8892b0; font-weight:normal;'>(Stats Estimées)</span>" if stats_h.get('is_fallback') else ""
 

@@ -115,24 +115,18 @@ def fetch_daily_catalog(date_str):
     except: return []
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def fetch_standings_v2(league_id):
-    """Fonction V2 avec gestion des groupes LDC et sécurité Anti-Spam API"""
+def fetch_standings_v3(league_id, season):
+    """Extraction exacte de la saison, 0 erreur de date possible"""
     try:
-        current_month = datetime.now().month
-        current_year = datetime.now().year
-        current_season = current_year - 1 if current_month < 8 else current_year
-        
-        time.sleep(0.4) # Pause de sécurité
-        r = requests.get(f"{BASE_URL}/standings", headers=HEADERS, params={"league": league_id, "season": current_season}, timeout=10).json()
-        if r.get('errors'): 
-            raise Exception("API Limit Hit")
+        time.sleep(0.3)
+        r = requests.get(f"{BASE_URL}/standings", headers=HEADERS, params={"league": league_id, "season": season}, timeout=10).json()
         return r.get('response', [])
     except: return []
 
-def get_match_odds(fixture_id):
+def get_match_odds_v3(fixture_id):
     if fixture_id:
         try:
-            time.sleep(0.4) # Pause de sécurité
+            time.sleep(0.3)
             r = requests.get(f"{BASE_URL}/odds", headers=HEADERS, params={"fixture": fixture_id}, timeout=5).json()
             if r.get('response'):
                 bets = r['response'][0]['bookmakers'][0]['bets'][0]['values']
@@ -141,12 +135,10 @@ def get_match_odds(fixture_id):
     return {}
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def fetch_h2h_v2(team_id_1, team_id_2):
+def fetch_h2h_v3(team_id_1, team_id_2):
     try:
-        time.sleep(0.4) # Pause de sécurité
+        time.sleep(0.3)
         r = requests.get(f"{BASE_URL}/fixtures/headtohead", headers=HEADERS, params={"h2h": f"{team_id_1}-{team_id_2}", "last": 3}, timeout=5).json()
-        if r.get('errors'):
-            raise Exception("API Limit Hit")
         return r.get('response', [])
     except: return []
 
@@ -165,11 +157,10 @@ def get_fallback_stats(team_name):
 def calculate_true_stats(team_id, team_name, standings_data):
     if not standings_data: return get_fallback_stats(team_name)
     try:
-        # On extrait la liste des groupes (important pour LDC / Europa)
         standings_lists = standings_data[0]['league']['standings']
         team_data = None
         
-        # On fouille dans tous les groupes jusqu'à trouver l'équipe
+        # Scanne tous les groupes pour trouver le club (indispensable pour les coupes d'Europe)
         for group in standings_lists:
             team_data = next((t for t in group if t['team']['id'] == team_id), None)
             if team_data: break
@@ -188,7 +179,7 @@ def calculate_true_stats(team_id, team_name, standings_data):
             stats['def'] = max(10, min(100, int(100 - ((avg_ga / 2.0) * 100))))
             stats['xg'] = round(avg_gf, 2)
             stats['form_str'] = form if form else 'N/A'
-            stats['rank'] = team_data.get('rank', '-')
+            stats['rank'] = str(team_data.get('rank', '-'))
             stats['dyn'] = int((sum([3 if r == 'W' else 1 if r == 'D' else 0 for r in form]) / (len(form) * 3)) * 100) if form else 70
             stats['is_fallback'] = False
             return stats
@@ -316,6 +307,9 @@ elif st.session_state.view == 'match':
     fix_id = m['fixture']['id']
     league_id = m['league']['id']
     
+    # La saison exacte est lue directement depuis la data du match
+    exact_season = m['league']['season']
+    
     col_btn, _ = st.columns([1, 5])
     with col_btn:
         st.markdown("<div class='btn-back'>", unsafe_allow_html=True)
@@ -325,13 +319,13 @@ elif st.session_state.view == 'match':
         st.markdown("</div>", unsafe_allow_html=True)
 
     with st.spinner("Extraction des mathématiques et historiques..."):
-        standings = fetch_standings_v2(league_id)
+        standings = fetch_standings_v3(league_id, exact_season)
         stats_h = calculate_true_stats(h_id, h, standings)
         stats_a = calculate_true_stats(a_id, a, standings)
         prob_h, prob_n, prob_a = calculate_probabilities(stats_h, stats_a)
         prob_o25, prob_btts = calculate_goals_probabilities(stats_h['xg'], stats_a['xg'])
-        api_odds = get_match_odds(fix_id)
-        h2h = fetch_h2h_v2(h_id, a_id)
+        api_odds = get_match_odds_v3(fix_id)
+        h2h = fetch_h2h_v3(h_id, a_id)
         
         est_badge = " <span style='font-size:12px; color:#8892b0; font-weight:normal;'>(Stats Estimées)</span>" if stats_h.get('is_fallback') else ""
 

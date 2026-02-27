@@ -514,3 +514,4 @@ elif st.session_state.view == 'team_profile':
                 <span style='color:#00ff88; font-weight:bold; float:right;'>{t['stats']['dyn']} / 100</span>
             </div>
         """, unsafe_allow_html=True)
+        

@@ -67,7 +67,6 @@ st.markdown("""
     .value-badge { background: rgba(0, 255, 136, 0.1); color: #00ff88; border: 1px solid #00ff88; padding: 5px 15px; border-radius: 20px; font-size: 14px; font-weight: bold; display: block; margin: 15px auto; width: fit-content; text-align: center;}
     .h2h-box { background: #1a1c23; padding: 10px; border-radius: 8px; font-size: 13px; text-align: center; margin-bottom: 5px;}
     
-    /* Forcer les champs de cotes à être super visibles */
     div[data-testid="stNumberInput"] input {
         background-color: #ffffff !important;
         color: #05070a !important;
@@ -87,7 +86,7 @@ st.markdown("""
 
 # --- OUTILS DE FORMATAGE ET MATHS ---
 def format_form(form_string):
-    if not form_string or form_string in ['Non dispo', 'N/A']: return "N/A"
+    if not form_string or form_string == 'Non dispo': return "N/A"
     form_string = form_string[-5:]
     return form_string.replace('W', '🟢').replace('D', '⚪').replace('L', '🔴')
 
@@ -102,27 +101,25 @@ def calculate_goals_probabilities(xg_h, xg_a):
                (prob_h[1]*prob_a[1]) + (prob_h[2]*prob_a[0]) + (prob_h[0]*prob_a[2])
     return int((1 - under_25) * 100), int(btts_yes * 100)
 
-# --- MOTEUR CATALOGUE ---
+# --- MOTEUR CATALOGUE (SÉCURITÉ CACHE AJOUTÉE) ---
 @st.cache_data(ttl=3600, show_spinner=False)
-def fetch_daily_catalog_stable(date_str):
-    try:
-        time.sleep(0.3)
-        r = requests.get(f"{BASE_URL}/fixtures", headers=HEADERS, params={"date": date_str, "timezone": "Europe/Paris"}, timeout=10).json()
-        fixtures = r.get('response', [])
-        valid_statuses = ['NS', 'TBD', 'PST']
-        filtered = [f for f in fixtures if f['league']['id'] in TOP_LEAGUES.keys() and f['fixture']['status']['short'] in valid_statuses]
-        filtered.sort(key=lambda x: x['fixture']['timestamp'])
-        return filtered
-    except: return []
+def fetch_daily_catalog_final(date_str):
+    time.sleep(0.3)
+    r = requests.get(f"{BASE_URL}/fixtures", headers=HEADERS, params={"date": date_str, "timezone": "Europe/Paris"}, timeout=10).json()
+    if r.get('errors'): raise Exception("API Limit Hit")
+    fixtures = r.get('response', [])
+    valid_statuses = ['NS', 'TBD', 'PST']
+    filtered = [f for f in fixtures if f['league']['id'] in TOP_LEAGUES.keys() and f['fixture']['status']['short'] in valid_statuses]
+    filtered.sort(key=lambda x: x['fixture']['timestamp'])
+    return filtered
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def fetch_standings_stable(league_id, season):
-    """Reçoit la saison exacte du match pour être 100% sûr de trouver le classement"""
-    try:
-        time.sleep(0.3)
-        r = requests.get(f"{BASE_URL}/standings", headers=HEADERS, params={"league": league_id, "season": season}, timeout=10).json()
-        return r.get('response', [])
-    except: return []
+def fetch_standings_final(league_id, season):
+    time.sleep(0.3)
+    r = requests.get(f"{BASE_URL}/standings", headers=HEADERS, params={"league": league_id, "season": season}, timeout=10).json()
+    # On interdit la mise en cache si l'API bloque la requête !
+    if r.get('errors'): raise Exception("API Limit Hit")
+    return r.get('response', [])
 
 def get_match_odds(fixture_id):
     if fixture_id:
@@ -135,12 +132,11 @@ def get_match_odds(fixture_id):
     return {}
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def fetch_h2h_stable(team_id_1, team_id_2):
-    try:
-        time.sleep(0.3)
-        r = requests.get(f"{BASE_URL}/fixtures/headtohead", headers=HEADERS, params={"h2h": f"{team_id_1}-{team_id_2}", "last": 3}, timeout=5).json()
-        return r.get('response', [])
-    except: return []
+def fetch_h2h_final(team_id_1, team_id_2):
+    time.sleep(0.3)
+    r = requests.get(f"{BASE_URL}/fixtures/headtohead", headers=HEADERS, params={"h2h": f"{team_id_1}-{team_id_2}", "last": 3}, timeout=5).json()
+    if r.get('errors'): raise Exception("API Limit Hit")
+    return r.get('response', [])
 
 # --- CALCUL DES STATS ---
 def get_fallback_stats(team_name):
@@ -160,7 +156,6 @@ def calculate_true_stats(team_id, team_name, standings_data):
         standings_lists = standings_data[0]['league']['standings']
         team_data = None
         
-        # Parcourt TOUS les groupes (important pour les Coupes ou championnats scindés)
         for group in standings_lists:
             team_data = next((t for t in group if t['team']['id'] == team_id), None)
             if team_data: break
@@ -178,7 +173,7 @@ def calculate_true_stats(team_id, team_name, standings_data):
             stats['atk'] = min(100, int((avg_gf / 2.5) * 100))
             stats['def'] = max(10, min(100, int(100 - ((avg_ga / 2.0) * 100))))
             stats['xg'] = round(avg_gf, 2)
-            stats['form_str'] = form if form else 'Non dispo'
+            stats['form_str'] = form
             stats['rank'] = str(team_data.get('rank', '-'))
             
             if form:
@@ -292,9 +287,13 @@ if st.session_state.view == 'home':
     date_after = date_today + timedelta(days=2)
 
     with st.spinner("Synchronisation des vitrines de matchs..."):
-        matches_today = fetch_daily_catalog_stable(date_today.strftime("%Y-%m-%d"))
-        matches_tmrw = fetch_daily_catalog_stable(date_tmrw.strftime("%Y-%m-%d"))
-        matches_after = fetch_daily_catalog_stable(date_after.strftime("%Y-%m-%d"))
+        try:
+            matches_today = fetch_daily_catalog_final(date_today.strftime("%Y-%m-%d"))
+            matches_tmrw = fetch_daily_catalog_final(date_tmrw.strftime("%Y-%m-%d"))
+            matches_after = fetch_daily_catalog_final(date_after.strftime("%Y-%m-%d"))
+        except:
+            matches_today, matches_tmrw, matches_after = [], [], []
+            st.warning("⚠️ L'API a bloqué par sécurité (Trop de requêtes rapides). Patiente 30 petites secondes et rafraîchis la page avec F5.")
 
     upcoming_matches = matches_tmrw + matches_after
 
@@ -313,7 +312,7 @@ elif st.session_state.view == 'match':
     h_id, a_id = m['teams']['home']['id'], m['teams']['away']['id']
     fix_id = m['fixture']['id']
     league_id = m['league']['id']
-    season_year = m['league']['season'] # L'année officielle et exacte du match
+    season_year = m['league']['season']
     
     col_btn, _ = st.columns([1, 5])
     with col_btn:
@@ -324,14 +323,22 @@ elif st.session_state.view == 'match':
         st.markdown("</div>", unsafe_allow_html=True)
 
     with st.spinner("Extraction des mathématiques et historiques..."):
-        standings = fetch_standings_stable(league_id, season_year)
+        try:
+            standings = fetch_standings_final(league_id, season_year)
+        except:
+            standings = []
+            
         stats_h = calculate_true_stats(h_id, h, standings)
         stats_a = calculate_true_stats(a_id, a, standings)
         prob_h, prob_n, prob_a = calculate_probabilities(stats_h, stats_a)
         prob_o25, prob_btts = calculate_goals_probabilities(stats_h['xg'], stats_a['xg'])
         api_odds = get_match_odds(fix_id)
-        h2h = fetch_h2h_stable(h_id, a_id)
         
+        try:
+            h2h = fetch_h2h_final(h_id, a_id)
+        except:
+            h2h = []
+            
         est_badge = " <span style='font-size:12px; color:#8892b0; font-weight:normal;'>(Stats Estimées)</span>" if stats_h.get('is_fallback') else ""
 
     st.markdown(f"""

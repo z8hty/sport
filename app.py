@@ -86,7 +86,7 @@ st.markdown("""
 
 # --- OUTILS DE FORMATAGE ET MATHS ---
 def format_form(form_string):
-    if not form_string or form_string == 'Non dispo': return "N/A"
+    if not form_string or form_string in ['Non dispo', 'N/A']: return "N/A"
     form_string = form_string[-5:]
     return form_string.replace('W', '🟢').replace('D', '⚪').replace('L', '🔴')
 
@@ -101,12 +101,17 @@ def calculate_goals_probabilities(xg_h, xg_a):
                (prob_h[1]*prob_a[1]) + (prob_h[2]*prob_a[0]) + (prob_h[0]*prob_a[2])
     return int((1 - under_25) * 100), int(btts_yes * 100)
 
-# --- MOTEUR CATALOGUE (SÉCURITÉ CACHE AJOUTÉE) ---
+# --- MOTEUR CATALOGUE (1 SEULE REQUÊTE GÉANTE AU LIEU DE 3) ---
 @st.cache_data(ttl=3600, show_spinner=False)
-def fetch_daily_catalog_final(date_str):
+def fetch_master_catalog_pro(date_from, date_to):
     time.sleep(0.3)
-    r = requests.get(f"{BASE_URL}/fixtures", headers=HEADERS, params={"date": date_str, "timezone": "Europe/Paris"}, timeout=10).json()
-    if r.get('errors'): raise Exception("API Limit Hit")
+    # L'API télécharge les 3 jours d'un seul coup
+    r = requests.get(f"{BASE_URL}/fixtures", headers=HEADERS, params={"from": date_from, "to": date_to, "timezone": "Europe/Paris"}, timeout=10).json()
+    
+    if r.get('errors'):
+        # On lève une erreur qui va remonter jusqu'à l'écran pour que tu vois le vrai problème
+        raise Exception(str(r.get('errors')))
+        
     fixtures = r.get('response', [])
     valid_statuses = ['NS', 'TBD', 'PST']
     filtered = [f for f in fixtures if f['league']['id'] in TOP_LEAGUES.keys() and f['fixture']['status']['short'] in valid_statuses]
@@ -114,14 +119,13 @@ def fetch_daily_catalog_final(date_str):
     return filtered
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def fetch_standings_final(league_id, season):
+def fetch_standings_pro(league_id, season):
     time.sleep(0.3)
     r = requests.get(f"{BASE_URL}/standings", headers=HEADERS, params={"league": league_id, "season": season}, timeout=10).json()
-    # On interdit la mise en cache si l'API bloque la requête !
-    if r.get('errors'): raise Exception("API Limit Hit")
+    if r.get('errors'): raise Exception(str(r.get('errors')))
     return r.get('response', [])
 
-def get_match_odds(fixture_id):
+def get_match_odds_pro(fixture_id):
     if fixture_id:
         try:
             r = requests.get(f"{BASE_URL}/odds", headers=HEADERS, params={"fixture": fixture_id}, timeout=5).json()
@@ -132,10 +136,10 @@ def get_match_odds(fixture_id):
     return {}
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def fetch_h2h_final(team_id_1, team_id_2):
+def fetch_h2h_pro(team_id_1, team_id_2):
     time.sleep(0.3)
     r = requests.get(f"{BASE_URL}/fixtures/headtohead", headers=HEADERS, params={"h2h": f"{team_id_1}-{team_id_2}", "last": 3}, timeout=5).json()
-    if r.get('errors'): raise Exception("API Limit Hit")
+    if r.get('errors'): raise Exception(str(r.get('errors')))
     return r.get('response', [])
 
 # --- CALCUL DES STATS ---
@@ -173,7 +177,7 @@ def calculate_true_stats(team_id, team_name, standings_data):
             stats['atk'] = min(100, int((avg_gf / 2.5) * 100))
             stats['def'] = max(10, min(100, int(100 - ((avg_ga / 2.0) * 100))))
             stats['xg'] = round(avg_gf, 2)
-            stats['form_str'] = form
+            stats['form_str'] = form if form else 'Non dispo'
             stats['rank'] = str(team_data.get('rank', '-'))
             
             if form:
@@ -283,19 +287,22 @@ if st.session_state.view == 'home':
     st.markdown("<p style='text-align:center; color:#8892b0; margin-bottom:40px;'>CATALOGUE D'ANALYSES ALGORITHMIQUES</p>", unsafe_allow_html=True)
 
     date_today = datetime.now()
-    date_tmrw = date_today + timedelta(days=1)
     date_after = date_today + timedelta(days=2)
+    
+    date_today_str = date_today.strftime("%Y-%m-%d")
+    date_after_str = date_after.strftime("%Y-%m-%d")
 
-    with st.spinner("Synchronisation des vitrines de matchs..."):
+    with st.spinner("Synchronisation de la base de données..."):
         try:
-            matches_today = fetch_daily_catalog_final(date_today.strftime("%Y-%m-%d"))
-            matches_tmrw = fetch_daily_catalog_final(date_tmrw.strftime("%Y-%m-%d"))
-            matches_after = fetch_daily_catalog_final(date_after.strftime("%Y-%m-%d"))
-        except:
-            matches_today, matches_tmrw, matches_after = [], [], []
-            st.warning("⚠️ L'API a bloqué par sécurité (Trop de requêtes rapides). Patiente 30 petites secondes et rafraîchis la page avec F5.")
-
-    upcoming_matches = matches_tmrw + matches_after
+            # On récupère TOUT en une seule requête (fini le blocage de vitesse !)
+            all_matches = fetch_master_catalog_pro(date_today_str, date_after_str)
+            
+            # On trie en python (0 consommation d'API)
+            matches_today = [m for m in all_matches if m['fixture']['date'].startswith(date_today_str)]
+            upcoming_matches = [m for m in all_matches if not m['fixture']['date'].startswith(date_today_str)]
+        except Exception as e:
+            matches_today, upcoming_matches = [], []
+            st.warning(f"⚠️ Blocage API. Raison exacte : {e}. Patiente 15 petites secondes et rafraîchis avec F5.")
 
     t1, t2 = st.tabs(["🔥 GROSSES AFFICHES (À VENIR)", "📅 MATCHS DU JOUR"])
 
@@ -312,7 +319,7 @@ elif st.session_state.view == 'match':
     h_id, a_id = m['teams']['home']['id'], m['teams']['away']['id']
     fix_id = m['fixture']['id']
     league_id = m['league']['id']
-    season_year = m['league']['season']
+    season_year = m['league']['season'] 
     
     col_btn, _ = st.columns([1, 5])
     with col_btn:
@@ -324,18 +331,19 @@ elif st.session_state.view == 'match':
 
     with st.spinner("Extraction des mathématiques et historiques..."):
         try:
-            standings = fetch_standings_final(league_id, season_year)
-        except:
+            standings = fetch_standings_pro(league_id, season_year)
+        except Exception as e:
             standings = []
+            st.toast(f"Statistiques réduites suite blocage API : {e}")
             
         stats_h = calculate_true_stats(h_id, h, standings)
         stats_a = calculate_true_stats(a_id, a, standings)
         prob_h, prob_n, prob_a = calculate_probabilities(stats_h, stats_a)
         prob_o25, prob_btts = calculate_goals_probabilities(stats_h['xg'], stats_a['xg'])
-        api_odds = get_match_odds(fix_id)
+        api_odds = get_match_odds_pro(fix_id)
         
         try:
-            h2h = fetch_h2h_final(h_id, a_id)
+            h2h = fetch_h2h_pro(h_id, a_id)
         except:
             h2h = []
             

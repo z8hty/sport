@@ -121,6 +121,7 @@ def fetch_daily_catalog(date_str):
 @st.cache_data(ttl=3600, show_spinner=False)
 def fetch_standings(league_id):
     try:
+        # Calcule automatiquement la saison en cours
         current_season = datetime.now().year if datetime.now().month >= 7 else datetime.now().year - 1
         r = requests.get(f"{BASE_URL}/standings", headers=HEADERS, params={"league": league_id, "season": current_season}, timeout=10).json()
         return r.get('response', [])
@@ -161,6 +162,7 @@ def calculate_true_stats(team_id, team_name, standings_data):
         standings_lists = standings_data[0]['league']['standings']
         team_data = None
         
+        # Fouille dans tous les groupes (indispensable pour les coupes d'Europe)
         for group in standings_lists:
             team_data = next((t for t in group if t['team']['id'] == team_id), None)
             if team_data: break

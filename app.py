@@ -108,7 +108,7 @@ def calculate_goals_probabilities(xg_h, xg_a):
 
 # --- MOTEUR CATALOGUE ---
 @st.cache_data(ttl=3600, show_spinner=False)
-def fetch_daily_catalog(date_str):
+def fetch_daily_catalog_cups(date_str):
     try:
         r = requests.get(f"{BASE_URL}/fixtures", headers=HEADERS, params={"date": date_str, "timezone": "Europe/Paris"}, timeout=10).json()
         fixtures = r.get('response', [])
@@ -121,7 +121,6 @@ def fetch_daily_catalog(date_str):
 @st.cache_data(ttl=3600, show_spinner=False)
 def fetch_standings(league_id):
     try:
-        # Calcule automatiquement la saison en cours
         current_season = datetime.now().year if datetime.now().month >= 7 else datetime.now().year - 1
         r = requests.get(f"{BASE_URL}/standings", headers=HEADERS, params={"league": league_id, "season": current_season}, timeout=10).json()
         return r.get('response', [])
@@ -162,7 +161,6 @@ def calculate_true_stats(team_id, team_name, standings_data):
         standings_lists = standings_data[0]['league']['standings']
         team_data = None
         
-        # Fouille dans tous les groupes (indispensable pour les coupes d'Europe)
         for group in standings_lists:
             team_data = next((t for t in group if t['team']['id'] == team_id), None)
             if team_data: break
@@ -287,9 +285,9 @@ if st.session_state.view == 'home':
     date_after = date_today + timedelta(days=2)
 
     with st.spinner("Synchronisation des vitrines de matchs..."):
-        matches_today = fetch_daily_catalog(date_today.strftime("%Y-%m-%d"))
-        matches_tmrw = fetch_daily_catalog(date_tmrw.strftime("%Y-%m-%d"))
-        matches_after = fetch_daily_catalog(date_after.strftime("%Y-%m-%d"))
+        matches_today = fetch_daily_catalog_cups(date_today.strftime("%Y-%m-%d"))
+        matches_tmrw = fetch_daily_catalog_cups(date_tmrw.strftime("%Y-%m-%d"))
+        matches_after = fetch_daily_catalog_cups(date_after.strftime("%Y-%m-%d"))
 
     upcoming_matches = matches_tmrw + matches_after
 
@@ -357,7 +355,6 @@ elif st.session_state.view == 'match':
         st.markdown("<p style='color:#8892b0; font-size:13px;'>Les cotes de l'API sont pré-remplies. Modifie-les avec tes propres cotes pour recalculer la Value Bet mathématique avant d'interroger l'IA.</p>", unsafe_allow_html=True)
         
         c_odd1, c_odd2, c_odd3 = st.columns(3)
-        # Gestion propre des valeurs par défaut si l'API est vide
         val_h = float(api_odds['Home']) if api_odds.get('Home') else 0.0
         val_d = float(api_odds['Draw']) if api_odds.get('Draw') else 0.0
         val_a = float(api_odds['Away']) if api_odds.get('Away') else 0.0

@@ -72,7 +72,6 @@ st.markdown("""
     .value-badge { background: rgba(0, 255, 136, 0.1); color: #00ff88; border: 1px solid #00ff88; padding: 5px 15px; border-radius: 20px; font-size: 14px; font-weight: bold; display: block; margin: 15px auto; width: fit-content; text-align: center;}
     .h2h-box { background: #1a1c23; padding: 10px; border-radius: 8px; font-size: 13px; text-align: center; margin-bottom: 5px;}
     
-    /* Forcer les champs de cotes à être super visibles (Fond blanc, texte noir, bordure fluo) */
     div[data-testid="stNumberInput"] input {
         background-color: #ffffff !important;
         color: #05070a !important;
@@ -122,7 +121,6 @@ def fetch_daily_catalog(date_str):
 @st.cache_data(ttl=3600, show_spinner=False)
 def fetch_standings(league_id):
     try:
-        # Calcule automatiquement la saison en cours
         current_season = datetime.now().year if datetime.now().month >= 7 else datetime.now().year - 1
         r = requests.get(f"{BASE_URL}/standings", headers=HEADERS, params={"league": league_id, "season": current_season}, timeout=10).json()
         return r.get('response', [])
@@ -163,7 +161,6 @@ def calculate_true_stats(team_id, team_name, standings_data):
         standings_lists = standings_data[0]['league']['standings']
         team_data = None
         
-        # Fouille dans tous les groupes (indispensable pour les coupes d'Europe)
         for group in standings_lists:
             team_data = next((t for t in group if t['team']['id'] == team_id), None)
             if team_data: break

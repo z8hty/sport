@@ -21,15 +21,20 @@ except:
 HEADERS = {"x-apisports-key": API_KEY}
 BASE_URL = "https://v3.football.api-sports.io"
 
-# Compétitions majeures du catalogue
+# Compétitions majeures du catalogue (Ligues + Coupes)
 TOP_LEAGUES = {
     2: "🇪🇺 Champions League",
     3: "🇪🇺 Europa League",
     39: "🇬🇧 Premier League",
+    45: "🇬🇧 FA Cup",
     61: "🇫🇷 Ligue 1",
+    66: "🇫🇷 Coupe de France",
     78: "🇩🇪 Bundesliga",
+    81: "🇩🇪 DFB Pokal",
     135: "🇮🇹 Serie A",
-    140: "🇪🇸 La Liga"
+    137: "🇮🇹 Coppa Italia",
+    140: "🇪🇸 La Liga",
+    143: "🇪🇸 Copa del Rey"
 }
 
 if 'view' not in st.session_state:
